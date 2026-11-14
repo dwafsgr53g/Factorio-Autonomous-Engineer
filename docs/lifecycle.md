@@ -4,7 +4,7 @@ The agent remains a standalone Factorio character entity, not a LuaPlayer. The m
 
 alive -> dead -> waiting_for_safe_spawn -> respawning -> alive.
 
-On on_entity_died, the mod matches the dead entity by its stored unit number, records the death location/cause, transfers available death-loot stacks into save-persistent recovery inventories, pauses the current task and schedules a respawn cooldown. Recovery bags separate main inventory, guns, ammunition and armor. After the cooldown the mod requires a collision-free spawn near the configured home point with no nearby enemy entities, creates a replacement character, restores the bags into matching character inventories and emits an agent_respawned event.
+On on_entity_died, the mod matches the dead entity by its stored unit number, records the death location/cause, transfers available death-loot stacks into save-persistent recovery inventories, pauses the current task and schedules a respawn cooldown. Recovery bags separate main inventory, guns, ammunition and armor. After the cooldown the mod requires a collision-free spawn near the configured home point with no nearby enemy entities, creates a replacement character, restores the bags into matching character inventories and emits an agent_respawned event. The emergency lock is then cleared, but the interrupted task remains paused until the planner explicitly resumes it.
 
 If the home area is under threat or has no free spawn location, respawn is deferred and retried; the agent is not intentionally recreated inside an enemy group. The task stays checkpointed. After the safety controller reports that the area is safe, the LLM can inspect the task and explicitly resume it.
 
