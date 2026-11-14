@@ -4,33 +4,73 @@ A semi-autonomous Factorio 2.1 engineer. The LLM is the strategic planner; the F
 
 ## Product boundary
 
-The LLM chooses goals and priorities. It does not calculate coordinates, pathfinding, movement, inventory slots, mining loops, crafting queues, item transfers, or defensive movement. The model receives a code-generated briefing (active planet, game stage, evidence, available capabilities) plus matching plain-Markdown skills. Only high-level objectives are exposed through MCP.
+The LLM decides goals, milestones and priorities. It does **not** calculate coordinates, pathfinding, movement, inventory slots, mining loops, crafting queues, item transfers, building geometry or defensive movement. The model receives a code-generated briefing (active planet/domain, game stage and evidence, available high-level capabilities) plus matching plain-Markdown skills. The server implementation and low-level gameplay interface are not exposed as MCP tools.
 
-## Current prototype
+The intended split is:
 
-- Strategic briefing with planet/domain and technology-based stage detection.
-- Stage and planet skill loading.
-- Nauvis-only starting-site selection using resource access, water, building clearance, nearby hostiles, and generated-chunk coverage.
-- High-level resource gathering with internal pathfinding, movement, mining, retries, and inventory-delta verification.
-- Independent safety controller and delayed death/respawn lifecycle with inventory recovery.
+- **LLM:** decide what should happen next and evaluate compact outcomes.
+- **Python MCP layer:** provide a small high-level interface, load stage/planet skills, hide private polling and return terminal task results.
+- **Factorio Lua mod:** own all game mechanics, map analysis, pathfinding, action state machines, survival and character lifecycle.
 
-The project is an early development scaffold. The Factorio Lua implementation has not yet been validated in a real 2.1.24 engine run. See docs/engine-test-plan.md.
+## Current prototype (0.1.0-dev)
 
-## Setup
+- Strategic briefing with planet/domain detection and technology-based stage classification.
+- Stage and planet skill loading from plain Markdown.
+- Nauvis-only bootstrap-site scoring using iron/copper/coal/stone access, water, a free furnace-sized footprint, nearby known hostiles and generated-chunk coverage. The selected location becomes the home/respawn point.
+- High-level resource gathering. The executor searches for a deposit, chooses an approach point, pathfinds, moves, mines, retries and verifies the actual inventory delta.
+- Independent safety controller: damage/hostile detection, task pre-emption, evacuation, and conditional return fire.
+- Persistent character lifecycle: death detection, recovery inventories, delayed safe respawn and event reporting.
+- The planner sees only high-level outcomes and compact status/events. No coordinates are returned by the model-facing tools.
 
-1. Use a disposable copy of a Factorio 2.1 save.
-2. Build the companion mod with: `python scripts/package_mod.py`.
-3. Install the generated ZIP from dist/ and enable Factorio Autonomous Engineer. Disable the original factorio_llm_use mod in this test setup.
-4. Run a dedicated/hosted Factorio server with RCON bound to loopback only.
-5. Configure the MCP server from mcp.json.example and install Python dependencies with uv.
-6. Start with get_briefing. During early Nauvis bootstrap, call select_starting_site, then execute a small gather_resource objective.
+**Important scope boundary:** selecting a starting site is implemented; constructing a complete starter base is not yet implemented. The selector chooses and registers a home location, but it does not teleport the character there or build a factory. The only current foreground gameplay task is `gather_resource`. Other stage/planet skill files are planning guidance, not claims that every stage's tools are implemented.
 
-## Development rules
+The Factorio Lua implementation has **not** yet been validated in a real Factorio 2.1.24 engine run. See [the engine test plan](docs/engine-test-plan.md).
 
-- The LLM is a planner, not a player motor controller.
-- The executor owns all Factorio mechanics and raw game state.
-- Capability lists and mod-side validation must agree; unsupported work fails closed.
-- Safety pre-emption and respawn must not depend on LLM availability.
-- Do not claim gameplay verification without an actual Factorio engine test.
+## MCP tools currently exposed
 
-See AGENTS.md for coding-agent guidance, docs/strategy-layer.md for the planner contract, and NOTICE.md/LICENSE for upstream attribution and licensing.
+- `get_briefing`: detect planet/stage, return capability allow-list and matching skill text.
+- `select_starting_site`: code-side Nauvis bootstrap site selection; the model supplies no coordinates.
+- `execute_task(task="gather_resource", resource=..., amount=...)`: one high-level gathering goal; internal action polling is hidden.
+- `get_agent_status`: compact lifecycle, safety, task and inventory summary.
+- `get_pending_events`: compact event queue with cursor.
+- `cancel_task` / `resume_task`: task lifecycle controls.
+
+## Setup (Windows)
+
+1. Use a **disposable copy** of a Factorio 2.1 save. Never test on the only copy of a valuable world.
+2. Install Python 3.12+ and `uv`.
+3. Build the companion mod:
+
+   ```powershell
+   uv sync
+   uv run python scripts/package_mod.py
+   ```
+
+4. Install `dist/factorio_autonomous_engineer_0.1.0.zip` into Factorio's mods directory and enable **Factorio Autonomous Engineer**. Disable the original `factorio_llm_use` mod in this test mod set so two engineers are not spawned.
+5. Run the dedicated Factorio server with RCON bound to loopback only (`127.0.0.1`). Do not expose RCON to a LAN or the internet.
+6. Copy `mcp.json.example`, set the local project directory and RCON password-file path, then register the MCP server with your host.
+7. Connect and call `get_briefing`. On early Nauvis, call `select_starting_site`, then test a small objective with `execute_task(task="gather_resource", resource="iron-ore", amount=20)`.
+
+## Development and verification
+
+```powershell
+uv sync
+uv run ruff check .
+uv run python -m unittest discover -s tests -v
+uv run python scripts/package_mod.py
+```
+
+Python unit tests cover the private task polling contract and skill loading. They are not a substitute for loading the mod in Factorio. Follow [the engine test plan](docs/engine-test-plan.md) on a disposable save before real gameplay use.
+
+## Architecture and contribution rules
+
+- [Strategic layer and skill activation](docs/strategy-layer.md)
+- [Architecture](docs/architecture.md)
+- [Roadmap](docs/roadmap.md)
+- [Safety controller](docs/safety.md)
+- [Death and respawn lifecycle](docs/lifecycle.md)
+- [Development instructions for coding agents](AGENTS.md)
+
+Capability lists and mod-side validation must agree. Unsupported actions fail closed. Safety must never depend on LLM availability. Never describe a Lua/gameplay behaviour as tested unless an actual Factorio engine run is recorded.
+
+See [NOTICE.md](NOTICE.md) and [LICENSE](LICENSE) for upstream attribution and licensing.
