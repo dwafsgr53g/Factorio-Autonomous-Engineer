@@ -1,0 +1,9 @@
+{
+  "name": "factorio_autonomous_engineer",
+  "version": "0.1.0",
+  "title": "Factorio Autonomous Engineer",
+  "author": "Project contributors",
+  "factorio_version": "2.1",
+  "dependencies": ["base >= 2.1.0"],
+  "description": "Semi-autonomous strategic Factorio engineer with high-level tasks, safety and respawn."
+}
