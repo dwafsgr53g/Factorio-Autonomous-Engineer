@@ -34,7 +34,7 @@ Target: Factorio 2.1.24, Windows, isolated copy of an existing save. Disable the
 - Confirm respawn is delayed, uses a new character unit number, and occurs only when the home area is collision-free and outside the enemy danger radius.
 - Confirm items return to their matching character inventory classes and that no items are duplicated or silently lost. Specifically inspect armor equipment-grid contents.
 - Make the home area unsafe before the respawn deadline; confirm the controller waits and retries instead of creating the character inside the threat radius.
-- Confirm the task can be explicitly resumed and only gathers the remaining requested amount.
+- Confirm the emergency lock clears after a successful respawn, but the task remains paused until explicitly resumed; then verify it gathers only the remaining requested amount.
 
 ## 5. Save/load and fault handling
 
