@@ -135,6 +135,14 @@ local function spawn(s, reason)
   character.name_tag = "Autonomous Engineer"
   if not s.home then s.home = {surface_index = surface.index, position = position} end
   s.agent, s.agent_unit_number = character, character.unit_number
+  -- Respawn completes the emergency lifecycle, but deliberately does not resume the paused task.
+  if reason == "death_recovery" and s.safety then
+    s.safety.active = false
+    s.safety.status = "safe"
+    s.safety.reason = "respawned"
+    s.safety.path, s.safety.path_request = nil, nil
+    s.safety.destination, s.safety.destination_kind = nil, nil
+  end
   s.lifecycle = s.lifecycle or {}
   s.lifecycle.status, s.lifecycle.respawn_at = "alive", nil
   s.lifecycle.spawn_block_reason, s.lifecycle.last_spawn_tick = nil, game.tick
