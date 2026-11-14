@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "factorio-autonomous-engineer": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "C:/path/to/factorio-autonomous-engineer",
+        "run",
+        "factorio-autonomous-engineer"
+      ],
+      "env": {
+        "FACTORIO_RCON_HOST": "127.0.0.1",
+        "FACTORIO_RCON_PORT": "27075",
+        "FACTORIO_RCON_PASSWORD_FILE": "C:/path/to/rcon-password.txt",
+        "FACTORIO_TASK_POLL_INTERVAL": "2.0"
+      }
+    }
+  }
+}
