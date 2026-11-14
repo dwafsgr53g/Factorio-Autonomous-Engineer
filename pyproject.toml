@@ -1,0 +1,29 @@
+[project]
+name = "factorio-autonomous-engineer"
+version = "0.1.0"
+description = "A task-oriented autonomous Factorio engineer with a persistent Lua character, safety controller, and MCP interface."
+requires-python = ">=3.12"
+dependencies = ["mcp>=2.2,<3"]
+
+[project.scripts]
+factorio-autonomous-engineer = "factorio_autonomous_engineer.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/factorio_autonomous_engineer"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "factorio_autonomous_engineer/skills"
+
+[dependency-groups]
+dev = ["ruff>=0.11,<0.18"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
