@@ -94,6 +94,14 @@ end)
 script.on_event(defines.events.on_tick, function()
   local s = state()
   lifecycle.tick(s)
+  -- A successful respawn clears the emergency lock, but the task remains paused
+  -- until the planner explicitly inspects state and resumes it.
+  if s.lifecycle and s.lifecycle.status == "alive" and s.safety
+    and s.safety.active and s.safety.status == "respawning" then
+    s.safety.active, s.safety.status, s.safety.reason = false, "safe", "respawned"
+    s.safety.path, s.safety.path_request = nil, nil
+    s.safety.destination, s.safety.destination_kind = nil, nil
+  end
   safety.tick(s)
   tasks.tick(s)
 end)
