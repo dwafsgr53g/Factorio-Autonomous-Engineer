@@ -47,6 +47,34 @@ The executor owns the complete construction cycle:
 11. Reconcile again after every build/clear/transfer. A cancelled ghost is never recreated by the same task. A short settle re-scan precedes successful completion.
 12. Return one compact result. No waypoints, inventory indices, entity handles or coordinates are exposed to the model.
 
+## Physical logistics task
+
+Example high-level request: `task=build_logistics, goal_item=iron-gear-wheel`
+
+The composite task owns the complete physical production-chain cycle:
+
+1. Resolve or reuse a linear logistics layout plan through the same production graph, catalog and
+   module placer used by the Stage-5 planner.
+2. Compute the physical plan: item belt routes, inserters, an ordinary coal chest feed and electric
+   pole coverage. Fail early with `missing_fuel_source`, `missing_power_source`, `blocked_route` or
+   `unsupported_chain`; no module or logistics ghost is created in those cases.
+3. Apply the module ghosts and create tagged logistics ghosts for belts, inserters, poles and the
+   output chest. No item is spent and no real entity is created by planning.
+4. Reuse the Stage-3 construction loop with a ghost filter so only this task's module/logistics
+   ghosts are built. Exact costs are paid from real inventory or ordinary chests; revival remains
+   the only real-building path.
+5. Retry a bounded number of pending ghosts after path/approach failures. Save/load resets in-flight
+   `building` entries to `pending` and resumes without duplicating completed builds.
+6. Verify, read-only, that belts are physically connected, inserters are powered, poles belong to a
+   real powered network and the furnace is actually fuelled.
+7. Monitor actual game ticks until a real iron gear wheel appears in the output chest. Ore, coal,
+   plate and recipe evidence are recorded. Entity existence alone is never success.
+
+Terminal statuses use the same runner-compatible set as other tasks. A `blocked` result carries a
+reason such as `missing_power_source`, `missing_fuel_source` or `blocked_route`. The task result is
+compact: connection counts, power/fuel status, production counts/evidence, required items and the
+missing-material map. No coordinates, paths, entity handles or wire identifiers reach the LLM.
+
 ## Construction terminal results
 
 - `succeeded`: all observed pending work is completed or already built/cancelled by players; `built_by_agent` is verified.

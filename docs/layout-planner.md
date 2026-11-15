@@ -5,8 +5,9 @@ Status: **IMPLEMENTED**, **UNIT TESTED**, **AUTOMATED ENGINE TESTED**,
 Factorio client on the persistent isolated server; see
 [verification-layout-planner.md](verification-layout-planner.md).
 
-The Layout Planner turns a production goal into a deterministic, persisted module layout. It is
-not a construction executor and not a working-factory generator:
+The Layout Planner turns a production goal into a deterministic, persisted module layout. Stage 6
+adds a separate physical-logistics planner on top of this plan; see [logistics.md](logistics.md).
+The Layout Planner itself is not a construction executor and not a working-factory generator:
 
 - planning creates no entity and spends no item;
 - applying a plan asks the existing Stage-4 module placer for ordinary `entity-ghost` objects only;

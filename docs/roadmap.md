@@ -39,11 +39,33 @@ Still out of scope: belt/pipe/rail/circuit/wire routing, inserter placement and 
 power generation, throughput optimization, complete starter-base generation, construction robots,
 logistic delivery, blueprint-book ingestion, planetary module libraries and deconstruction.
 
+## Stage 6 - Physical logistics
+
+Stage 6 connects the Stage-5 layout graph with real infrastructure and demonstrates the first
+operational Nauvis production chain:
+
+- deterministic bounded belt routing with straight segments and turns;
+- native inserter placement and real item movement for drill, furnace, assembler and chest roles;
+- actual furnace fuel delivery from an ordinary coal chest (direct or belt-fed);
+- real electric poles, supply-area coverage and copper-wire reach connected to an existing powered
+  network, with honest `missing_power_source` reporting;
+- paid ghost construction of every belt, inserter, pole and output chest through the Stage-3
+  executor;
+- read-only verification of real connections, power, fuel and actual iron gear wheel production;
+- save/load, cancellation, safety/death interruption, explicit resume and player route-conflict
+  handling;
+- a compact `build_logistics` composite task for the model.
+
+Still out of scope: underground belts, splitters, branching belt networks, fluids, rail, circuits,
+power generation, autonomous coal mining, construction robots, logistics networks, throughput
+optimization and other planets. See [logistics.md](logistics.md).
+
 ## Next parity work
 
 - Add a general goal/plan executor and a stage/planet-aware capability registry.
 - Add high-level automation, crafting, delivery, repair and refuelling workflows.
-- Extend the Stage-5 planner with routing, power/fuel modules and production-rate-aware sizing after those capabilities exist.
+- Extend the Stage-6 planner with underground belts, branching/merging routes and production-rate-aware sizing after those capabilities exist.
+- Add steam power generation and autonomous coal mining as future modules, keeping them separate from the Stage-6 external-prerequisite contract.
 - Add module/equipment-aware ghost requests and item-request-proxy handling, arbitrary belt/pipe layout, construction robots and logistics-network delivery after the paid-ghost foundation is extended.
 - Add planet-specific bootstrap/site planners and survival skills for Vulcanus, Fulgora, Gleba and Aquilo.
 - Add production and science-chain analysis as compact strategic state.

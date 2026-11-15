@@ -80,6 +80,28 @@ summaries exclude coordinates, ports, entity lists and ghost unit numbers. Full 
 available only through internal RCON operations for the engine harness and future code-owned
 workflows. Actual paid construction remains the Stage-3 `assist_construction` path.
 
+## Physical logistics (Stage 6)
+
+`lib/logistics.lua` consumes a Stage-5 plan's logical item edges and produces a deterministic
+physical plan: belt routes on the tile grid, native inserter geometry, a fuel feed from an
+ordinary coal chest and electric poles connected to an existing powered network. The planner is
+bounded to a linear eastward chain. It uses a cardinal A* with fixed neighbour order and
+`(f, g, x, y)` tie-breaking, and it reports `blocked`, `unsupported`, `missing_fuel_source` or
+`missing_power_source` instead of forcing a connection.
+
+Every belt, inserter, pole and chest is first an ordinary `entity-ghost`; paid revival remains the
+Stage-3 executor. The composite `build_logistics` task applies the Stage-5 module ghosts, creates
+the logistics ghosts, builds them with the same exact-cost payment path, then verifies real
+directions, belt neighbours, inserter power, pole network membership, furnace fuel and actual
+production. It observes `crafter_input`/`crafter_output`, the output chest and live ticks; module
+or belt existence alone is never success.
+
+`LuaTransportLine` is not used to move items. Production code performs no transport-line
+mutation, machine-inventory writes, crafting-progress writes, energy fabrication or wire-reach
+bypass. Poles auto-connect through the engine inside their live wire reach; the planner never
+disconnects player wiring. The task ghost filter restricts construction to the composite task's
+own module and logistics ghosts. See [logistics.md](logistics.md).
+
 ## Shared-world collaboration
 
 Player actions are reconciled against the same ghost and entity objects. The executor does not delete, deconstruct or reconfigure player buildings. A player completion is recognized by the real entity at the ghost position, a cancellation by the absence of both ghost and replacement entity, and a blueprint change by a new ghost identity. Player presence near a target defers that target rather than racing the player. Materials removed by a player from a chest are observed through the actual inventory counts at transfer time.

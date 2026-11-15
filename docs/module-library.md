@@ -25,8 +25,13 @@ and item recipes are enabled on the current force, even though their prototypes 
 - **Function:** one electric mining drill on an iron-ore patch.
 - **Geometry:** base footprint `3 x 3`, anchor at the top-left tile corner; effective bounds
   `3 x 4` because of a `output_clearance` reserved strip (`x=0..3`, `y=3..4`).
-- **Entity:** `electric-mining-drill` at `{1.5, 1.5}`.
-- **Orientations:** `0`, `90`, `180`, `270`; the entity is rotatable.
+- **Entity:** `electric-mining-drill` at `{1.5, 1.5}`, entity direction `east` (`4`) when the
+  module is unrotated. The real drill output vector therefore points at the declared east
+  `ore_output` port; a north-facing drill (the Stage-4 definition) dropped ore on the tile
+  above the module and could never feed a belt routed from that port. Stage 6 corrected this
+  latent geometry defect and the engine tests now assert the real drill direction.
+- **Orientations:** `0`, `90`, `180`, `270`; the entity is rotatable and its direction is
+  rotated with the module.
 - **Ports:** `ore_output` (item output `iron-ore`, east side at `{3, 1.5}` when unrotated,
   direction east) and `power_input` (electric input at the drill center).
 - **Requirements:** technology `electric-mining-drill`; no process recipe.
