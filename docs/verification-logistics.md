@@ -189,8 +189,16 @@ Verified in the live shared world:
 - the output chest refilled through the engine from 2 to 4 gear wheels in 12 seconds, and
   `logistics_verify` remained `operational` with entities, power, fuel and production all true.
 
-The server was not restarted or reloaded after the production acceptance. The separate Stage-5
-server remained available for inspection.
+After the final batch/drift-recovery build, the same human world was saved, the Stage-6 server was
+restarted on the new archive, and the real player reconnected. A final read-only
+`logistics_verify` returned `operational` with real entities, power, fuel and production history
+confirmed; the output chest held 493 iron gear wheels. The mining drill's current iron patch was
+depleted at that point, so no new gear wheel was produced during this final instant check. Actual
+live production over ticks was observed during the earlier human acceptance and in automated
+`s12`. The distance/player and belt/ghost recovery improvements are covered by automated `s12`
+scenarios I/J/K.
+
+The separate Stage-5 server remained available for inspection throughout.
 
 ## Archive verification
 
