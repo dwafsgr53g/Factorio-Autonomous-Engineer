@@ -188,7 +188,10 @@ inserters are not used.
    never success.
 
 Missing materials are reported with exact per-item counts. Material acquisition uses the existing
-ordinary-chest path and never fabricates items.
+ordinary-chest path and never fabricates items. For `build_logistics` the executor aggregates the
+exact requirements of every currently buildable ghost and fetches the whole shortfall in one
+ordinary-chest trip (bounded by inventory capacity and the live chest contents). Payment and
+`revive()` remain per ghost. `acquisition_trips` records the number of chest transfers.
 
 ### Failure statuses
 
@@ -222,6 +225,13 @@ during the search phase.
 - A player removing a planned ghost or placing a real building on a route invalidates that route.
   The task must not report success; it finishes `blocked`/`partial`, and the player's building is
   preserved.
+- If the character ends up inside a pending ghost footprint, it chooses a free position outside
+  all pending ghosts and walks there directly (`walking_state`), then resumes. It never needs a
+  path request from an embedded position. A bounded emergency teleport is used only if direct
+  walking is blocked after several attempts; `step_out_count` and `step_out_teleports` expose this.
+- If the character is standing on a working transport/underground belt or splitter, it walks off
+  to a free non-belt position before building or continuing. `belt_step_offs` records the
+  successful walk-offs. Approach candidates also exclude belt tiles where possible.
 
 ## 10. Verification and observations
 
@@ -282,4 +292,7 @@ The reusable scenarios are:
   exact paid cost, save/load during construction/material collection/monitoring, safety
   interruption, death and resume, empty coal chest and player route conflict.
 
-Results are recorded in [engine-test-plan.md](engine-test-plan.md).
+Stage-6 engine runs set `game.speed = 60` (test-only) and use short, phase-specific timeouts.
+Scenarios that need to observe an intermediate state temporarily set speed 1–5, then restore 60
+for completion. Results are recorded in [engine-test-plan.md](engine-test-plan.md) and
+[verification-logistics.md](verification-logistics.md).

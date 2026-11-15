@@ -62,7 +62,10 @@ The composite task owns the complete physical production-chain cycle:
    output chest. No item is spent and no real entity is created by planning.
 4. Reuse the Stage-3 construction loop with a ghost filter so only this task's module/logistics
    ghosts are built. Exact costs are paid from real inventory or ordinary chests; revival remains
-   the only real-building path.
+   the only real-building path. The composite task aggregates all pending ghost costs and fetches
+   the whole available shortfall in one chest trip (`acquisition_trips`), while payment remains
+   per ghost. It also walks out of any pending ghost footprint or off a working belt before
+   continuing (`step_out_count`, `belt_step_offs`, bounded `step_out_teleports`).
 5. Retry a bounded number of pending ghosts after path/approach failures. Save/load resets in-flight
    `building` entries to `pending` and resumes without duplicating completed builds.
 6. Verify, read-only, that belts are physically connected, inserters are powered, poles belong to a

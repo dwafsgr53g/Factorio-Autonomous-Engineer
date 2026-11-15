@@ -122,14 +122,14 @@ All runs used the isolated Stage-6 profile and exited 0.
 
 | Scenario | Checks | Result | Duration |
 | --- | --- | --- | --- |
-| `s9_belt_routing.py` | 21/21 | PASS | 76 s |
-| `s10_inserters.py` | 17/17 | PASS | 129 s |
-| `s11_power_distribution.py` | 15/15 | PASS | 84 s |
-| `s12_gear_production.py` | 35/35 | PASS | 358 s |
-| `s5_construction.py` | 50/50 | PASS | 75 s |
-| `s6_construction_persistence.py` | 44/44 | PASS | 117 s |
-| `s7_module_catalog.py` | 84/84 | PASS | 57 s |
-| `s8_layout_planner.py` | 64/64 | PASS | 47 s |
+| `s9_belt_routing.py` | 21/21 | PASS | 50 s (60x) |
+| `s10_inserters.py` | 17/17 | PASS | 70 s (60x) |
+| `s11_power_distribution.py` | 15/15 | PASS | 32 s (60x) |
+| `s12_gear_production.py` | 43/43 | PASS | 176 s (60x, with 1–5x observation windows) |
+| `s5_construction.py` | 50/50 | PASS | 76 s (1x) |
+| `s6_construction_persistence.py` | 44/44 | PASS | 117 s (1x) |
+| `s7_module_catalog.py` | 84/84 | PASS | 39 s (60x) |
+| `s8_layout_planner.py` | 64/64 | PASS | 45 s (60x) |
 
 ### Actual production observed
 
@@ -159,7 +159,13 @@ Additional evidence:
   same chain without duplicate modules;
 - a player building placed on a not-yet-built route tile prevents success and remains intact;
 - a real player character inside the bounded scan rectangle but outside the chain no longer
-  blocks the whole plan; the chain is built and the player is preserved (`s12` scenario I).
+  blocks the whole plan; the chain is built and the player is preserved (`s12` scenario I);
+- the full pending construction shortfall is fetched from an ordinary chest in one trip
+  (`acquisition_trips = 1`, 21 items), while payment and revival remain per ghost (`s12` C);
+- a character placed inside a pending module ghost walks out normally, with zero emergency
+  teleports, and completes production (`s12` J);
+- a character starting on a real working belt walks off it normally before construction, with
+  zero emergency teleports (`s12` K).
 
 ## Human multiplayer acceptance
 
@@ -188,14 +194,11 @@ server remained available for inspection.
 
 ## Archive verification
 
-- Final Stage-6 tested mod commit: `923cb78ee9ba2d7dcd22aca8853d9b646467c125`
-- Earlier shared Stage-3/4/5 regression mod commit: `b5f679e8038a3779c91e83f2000465b47372b4e2` (the only later
-  production change is the player-scope check in `logistics.lua`, exercised by `s12` scenario I;
-  `s5`–`s8` do not use that planner)
-- Tested scenario commit: `923cb78ee9ba2d7dcd22aca8853d9b646467c125` (includes scenario I)
+- Final Stage-6 tested mod commit: `17c47ed` (`feat: batch logistics materials and recover from drift`)
+- Final tested scenario commit: `408f8b3` (`test: cover batch acquisition and drift recovery`)
+- Earlier human-acceptance core commit: `923cb78ee9ba2d7dcd22aca8853d9b646467c125`
 - Archive: `dist/factorio_autonomous_engineer_0.1.0.zip`
-- Archive SHA-256: `f17de03ea618508e324242776a06d4b9fd204cec6926dabbafecfc4f944b20ce`
-- Archive size: 86,460 bytes
+- Archive SHA-256: `c834464144192bfc865f75c5bb08fff2ee381e595d55b088514372ac687f6e03`
 - Entries: 21; Git mod blobs: 21; mismatches: **none**
 - Comparison: every archive entry was read byte-for-byte and compared with
   `git show HEAD:mod/factorio_autonomous_engineer/<entry>`.

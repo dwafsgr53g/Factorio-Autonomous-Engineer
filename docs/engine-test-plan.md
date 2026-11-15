@@ -145,7 +145,12 @@ construction materials. They do not place the agent's modules, belts, inserters 
   wiring, real network membership and honest detection after removing generation.
 - `s12_gear_production.py` — full iron ore → plate → gear production over ticks, exact paid cost,
   save/load during construction/material collection/monitoring, safety interruption and resume,
-  death and resume, empty coal chest and player route conflict.
+  death and resume, empty coal chest, distant/real player handling, batch material acquisition,
+  and recovery from being inside a pending ghost or on a working belt.
+
+Stage-6 runs use `game.speed = 60` by default. Observation windows for save/load/recovery briefly
+use speed 1–5, then restore 60. Timeouts are phase-specific and deliberately short; they must not
+be increased to compensate for a fast-forwarded simulation.
 
 Impact-based regression policy used for Stage 6:
 
