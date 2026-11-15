@@ -1,4 +1,5 @@
 import unittest
+
 from factorio_autonomous_engineer.skills import load_skill_pack
 
 

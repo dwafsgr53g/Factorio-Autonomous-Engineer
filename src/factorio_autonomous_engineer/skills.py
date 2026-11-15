@@ -1,5 +1,6 @@
 """Load stage and planet guidance as plain text; never execute skill content."""
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,9 @@ def load_skill_pack(profile: dict[str, Any]) -> list[dict[str, str]]:
         if content:
             result.append({"id": skill_id, "content": content.strip()})
     if not result:
-        result.append({"id": "core_strategy",
-                       "content": "Use only capabilities returned by get_briefing. Plan goals, not game micro-actions."})
+        result.append({
+            "id": "core_strategy",
+            "content": ("Use only capabilities returned by get_briefing. "
+                        "Plan goals, not game micro-actions."),
+        })
     return result

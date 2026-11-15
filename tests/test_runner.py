@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+
 from factorio_autonomous_engineer.runner import TaskRunner
 
 
@@ -27,14 +28,16 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             {"status": "succeeded", "success": True, "collected": 100},
         ])
         runner = TaskRunner(bridge, poll_interval=0.1, sleep=lambda _: asyncio.sleep(0))
-        result = await runner.execute({"task": "gather_resource", "resource": "iron-ore", "amount": 100})
+        result = await runner.execute(
+            {"task": "gather_resource", "resource": "iron-ore", "amount": 100})
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["collected"], 100)
         self.assertEqual([c[0] for c in bridge.calls],
                          ["task_start", "task_status", "task_status", "task_status"])
 
     async def test_emergency_is_returned_without_waiting_for_normal_completion(self):
-        bridge = FakeBridge([{"status": "paused", "emergency": {"active": True, "reason": "under_attack"}}])
+        bridge = FakeBridge([{"status": "paused",
+                              "emergency": {"active": True, "reason": "under_attack"}}])
         runner = TaskRunner(bridge, sleep=lambda _: asyncio.sleep(0))
         result = await runner.execute({"task": "gather_resource"})
         self.assertEqual(result["status"], "interrupted_by_safety")

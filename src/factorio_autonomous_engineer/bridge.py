@@ -4,6 +4,7 @@ The packet framing and idempotent request pattern are adapted from the MIT-licen
 Factorio LLM Use bridge by Tsyklop. See NOTICE.md and LICENSE.
 """
 from __future__ import annotations
+
 import json
 import socket
 import struct

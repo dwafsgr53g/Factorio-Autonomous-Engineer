@@ -1,9 +1,11 @@
 """Hide internal Factorio action polling behind one high-level MCP invocation."""
 from __future__ import annotations
+
 import asyncio
 import time
 from collections.abc import Callable
 from typing import Any
+
 from .bridge import Bridge, BridgeError
 
 TERMINAL_STATES = {
