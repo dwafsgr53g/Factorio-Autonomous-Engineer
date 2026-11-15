@@ -156,7 +156,7 @@ local function enter_emergency(s, agent, reason, enemy, event)
   end
   stop_ordinary_actions(agent)
   append_event(s, "agent_under_attack", {
-    reason = reason, health = agent.health, max_health = agent.prototype.max_health,
+    reason = reason, health = agent.health, max_health = agent.max_health,
     position = agent.position, cause = s.safety.cause, source = s.safety.source,
     damage_type = s.safety.damage_type,
   })
@@ -229,7 +229,7 @@ function M.tick(s)
     if candidate and candidate.valid then enemies[#enemies + 1] = candidate end
   end
   local enemy = nearest_enemy(agent, enemies)
-  if enemy and armed(agent) and agent.health > agent.prototype.max_health * CRITICAL_HEALTH_RATIO then
+  if enemy and armed(agent) and agent.health > agent.max_health * CRITICAL_HEALTH_RATIO then
     agent.shooting_state = {state = defines.shooting.shooting_enemies, position = enemy.position}
   else
     agent.shooting_state = {state = defines.shooting.not_shooting, position = agent.position}

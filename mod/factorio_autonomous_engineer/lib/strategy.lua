@@ -102,7 +102,7 @@ function M.context(s)
     agent = {
       lifecycle = s.lifecycle and s.lifecycle.status or "uninitialized",
       alive = agent ~= nil,
-      health_ratio = agent and agent.health / agent.prototype.max_health or nil,
+      health_ratio = agent and agent.health / agent.max_health or nil,
     },
     skills = skills,
     available_capabilities = capabilities,

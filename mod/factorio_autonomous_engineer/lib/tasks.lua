@@ -1,5 +1,10 @@
 local M = {}
 
+-- Whole-task budget: fixed travel/retry allowance plus per-unit mining time, so the
+-- bounded failure still fires but a normal-sized gathering goal can finish.
+local TASK_BASE_TICKS = 60 * 120
+local TASK_TICKS_PER_UNIT = 60 * 3
+
 local function distance(a, b)
   local dx, dy = a.x - b.x, a.y - b.y
   return math.sqrt(dx * dx + dy * dy)
@@ -100,6 +105,7 @@ function M.start(s, p)
     collected = 0, start_count = inventory_count(s.agent, p.resource),
     visited = {}, deposits_used = 0, status = "running", phase = "search",
     started_tick = game.tick, last_progress_tick = game.tick,
+    deadline_ticks = TASK_BASE_TICKS + p.amount * TASK_TICKS_PER_UNIT,
   }
   search_target(s, s.task)
   return {task_id = s.task.id, status = s.task.status}
@@ -133,7 +139,10 @@ function M.tick(s)
     task.collected, task.last_progress_tick = total, game.tick
   end
   if task.collected >= task.amount then finish(s, "succeeded", "requested_amount_collected") return end
-  if game.tick - task.started_tick > 60 * 30 then finish(s, "failed", "task_deadline_exceeded") return end
+  if game.tick - task.started_tick > (task.deadline_ticks or TASK_BASE_TICKS) then
+    finish(s, "failed", "task_deadline_exceeded")
+    return
+  end
   if task.phase == "pathing" and game.tick - (task.phase_started_tick or game.tick) > 60 * 20 then
     if task.target and task.target.valid then task.visited[entity_key(task.target)] = true end
     task.target, task.path, task.path_request = nil, nil, nil
