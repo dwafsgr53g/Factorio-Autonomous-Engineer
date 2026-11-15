@@ -1,9 +1,11 @@
 # Stage 5 Layout Planner verification report
 
 Date: 2026-11-15
-Status: **IMPLEMENTED**, **UNIT TESTED**, **AUTOMATED ENGINE TESTED**
-Human multiplayer acceptance: **PENDING — waiting for a real Factorio client to join the isolated
-test server.**
+Status: **IMPLEMENTED**, **UNIT TESTED**, **AUTOMATED ENGINE TESTED**,
+**HUMAN MULTIPLAYER TESTED**
+
+Human multiplayer acceptance: **PASS** — real Factorio client joined the persistent isolated
+server on 2026-11-15 and the interactive checks completed on the same running world.
 
 Tested runtime: Factorio **2.1.24** (build 87808, Windows Steam binary), isolated write-data
 directory `.runtime/factorio-test`. Mod set: base, elevated-rails, quality, recycler, space-age,
@@ -131,10 +133,33 @@ Stage-5 observations on the iron-gear demonstration:
 - Automated obstacle checks use test characters; they do not substitute for the human multiplayer
   acceptance test.
 
-## 5. Human multiplayer acceptance (pending)
+## 5. Human multiplayer acceptance — PASS
 
-This state must not be marked passed until a real Factorio client joins the isolated server and the
-interactive checks complete. Phase A ends with the server running and
-`STATUS: WAITING_FOR_USER_JOIN`. Phase B resumes only after the user explicitly confirms the
-connection, verifies the real player character in the running world, generates and applies the
-iron-gear plan, and checks that the player's buildings/blueprints/activity were preserved.
+The persistent server was started from the disposable `s8-human.zip` world on the isolated test
+profile. The real Factorio client joined with player name `emerge.f`; the server observed a real
+`LuaPlayer` character (unit 2) distinct from the autonomous character (unit 1). No synthetic player
+was created for this acceptance test, and the server was not reloaded or restarted during it.
+
+Observed sequence on the same running world:
+
+1. Initial plan `plan_4b977af94571f011` reported `partial` / `valid` / materializable, selected the
+   three expected Nauvis modules and reported coal fuel plus electric-network dependencies.
+2. Apply created exactly three ghosts (`electric-mining-drill` unit 48, `stone-furnace` unit 49,
+   `assembling-machine-1` unit 50), no real module entity, no inventory change and no change to the
+   player's crash-site spaceship.
+3. The real player moved to within **1.86–2.89 tiles** of the planned modules. A repeated apply
+   returned `stale_plan` with `world_changed`; zero new ghosts were created, the three ghost unit
+   numbers stayed identical and player buildings stayed unchanged.
+4. With the real player still near, a fresh plan placed its placeable modules **9.93–10.01 tiles**
+   away (outside the 8-tile player work radius) and correctly stayed `invalid` because the existing
+   plan ghosts occupied the only mining site. Planning created no entity.
+5. The player moved **25.89 tiles** away and placed a real player blueprint ghost
+   (`stone-furnace`, unit 119) outside the planned footprints.
+6. Reapplying the original plan through the public MCP-facing operation returned
+   `already_applied`: 0 created, 3 already applied, no stale rejection. The player ghost, the
+   crash-site spaceship, the player inventory and the three plan ghosts were all unchanged, and the
+   player ghost did not overlap any planned module. No real module building appeared.
+
+Result: the planner observed and respected the real player's character and work radius, refused to
+reapply while the player was working at the site, preserved the player's building and blueprint
+ghost, and remained idempotent after the player moved away.

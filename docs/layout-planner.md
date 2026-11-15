@@ -1,8 +1,9 @@
 # Layout Planner (Stage 5)
 
-Status: **IMPLEMENTED**, **UNIT TESTED**, **AUTOMATED ENGINE TESTED** on Factorio 2.1.24.
-**HUMAN MULTIPLAYER TESTED** is recorded only after a real Factorio client joined the isolated
-server and the interactive checks completed; see the end of this document.
+Status: **IMPLEMENTED**, **UNIT TESTED**, **AUTOMATED ENGINE TESTED**,
+**HUMAN MULTIPLAYER TESTED** on Factorio 2.1.24. The real multiplayer acceptance used a real
+Factorio client on the persistent isolated server; see
+[verification-layout-planner.md](verification-layout-planner.md).
 
 The Layout Planner turns a production goal into a deterministic, persisted module layout. It is
 not a construction executor and not a working-factory generator:
