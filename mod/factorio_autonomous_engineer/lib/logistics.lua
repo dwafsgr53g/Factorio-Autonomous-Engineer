@@ -1003,11 +1003,27 @@ function M.plan(s, p)
       power_ok = false, belts_connected = false, started_tick = nil},
     blocked = nil, unsupported = nil,
   }
-  local player_block = players and #players > 0
+  -- A player anywhere inside the bounded scan rectangle does not invalidate the whole
+  -- chain. Only a character physically intersecting a planned module footprint is a hard
+  -- planning conflict; routes avoid player work areas through the occupancy map and ghost
+  -- placement checks each tile again.
+  local player_block = false
+  for _, player in ipairs(players or {}) do
+    if player.valid then
+      for _, module in ipairs(layout_plan.modules or {}) do
+        if player.position.x > module.bounds[1].x - 0.5
+          and player.position.x < module.bounds[2].x + 0.5
+          and player.position.y > module.bounds[1].y - 0.5
+          and player.position.y < module.bounds[2].y + 0.5 then
+          player_block = true
+        end
+      end
+    end
+  end
   if player_block then
     physical.status = "blocked"
-    physical.blocked = "player_in_work_area"
-    return {ok = false, status = "blocked", reason = "player_in_work_area",
+    physical.blocked = "player_in_module_footprint"
+    return {ok = false, status = "blocked", reason = "player_in_module_footprint",
       physical = store_physical(s, physical)}
   end
   for _, edge in ipairs(layout_plan.edges or {}) do

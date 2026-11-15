@@ -264,6 +264,24 @@ def scenario_h() -> None:
           h.pretty(placed))
 
 
+def scenario_i() -> None:
+    print("\nScenario I - a distant real player does not block the whole chain")
+    b, plan, details = f.prepare("s12i-distant-player.zip")
+    anchor = details["anchor"]
+    player = h.create_player_character(anchor["x"] + 1.5, anchor["y"] - 12.5, b)
+    print("  player:", h.pretty(player))
+    task_id = f.start_logistics(b)
+    result = h.wait_task(task_id, b, timeout=900)
+    print("  final:", h.pretty(result)[:800])
+    check("a player inside the scan area but outside the chain does not block planning",
+          result.get("status") == "succeeded", result.get("reason"))
+    check("the distant player character is preserved",
+          bool(h.entity_at("character", player["position"]["x"],
+                           player["position"]["y"], 2, b)),
+          h.pretty(player))
+    h.remove_entity(player["unit"], b)
+
+
 async def main() -> int:
     scenario_a()
     scenario_b()
@@ -273,6 +291,7 @@ async def main() -> int:
     scenario_f()
     scenario_g()
     scenario_h()
+    scenario_i()
     failed = [name for name, ok, _ in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed")
     if failed:
