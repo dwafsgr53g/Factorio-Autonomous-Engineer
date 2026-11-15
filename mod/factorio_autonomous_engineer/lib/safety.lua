@@ -213,8 +213,9 @@ function M.tick(s)
       safety.nearby_enemies, safety.last_enemy_scan_tick = scanned, game.tick
     elseif #scanned > 0 then
       enter_emergency(s, agent, "nearby_hostiles", nearest_enemy(agent, scanned), nil)
-      safety, safety.nearby_enemies = s.safety, scanned
-      safety.last_enemy_scan_tick = game.tick
+      safety = s.safety
+      if not safety then return end
+      safety.nearby_enemies, safety.last_enemy_scan_tick = scanned, game.tick
     else
       return
     end

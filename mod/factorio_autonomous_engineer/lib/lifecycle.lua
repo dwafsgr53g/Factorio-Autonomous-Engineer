@@ -1,5 +1,6 @@
 local M = {}
 local RECOVERY_SLOTS, RESPAWN_DELAY, HOME_DANGER_RADIUS = 200, 180, 48
+local CORPSE_RADIUS, CORPSE_CAPTURE_TICKS = 3, 600
 
 local function append_event(s, kind, data)
   s.events = s.events or {}
@@ -67,6 +68,53 @@ local function capture_dropped_items(s, event)
     }) do
       local ok, inventory = pcall(function() return event.entity.get_inventory(inventory_id) end)
       if ok and inventory then moved = moved + store_inventory(inventory, bags) end
+    end
+  end
+  return moved
+end
+
+-- A dying character does not fill on_entity_died's loot: the engine moves the inventory into a
+-- character-corpse that only becomes readable on the following tick. Sweep the corpse afterwards
+-- so armor (including its equipment grid) and weapons survive death intact.
+local CORPSE_INVENTORY_IDS = {}
+for _, candidate in pairs({defines.inventory.corpse, defines.inventory.chest,
+                           defines.inventory.character_main}) do
+  if type(candidate) == "number" then
+    CORPSE_INVENTORY_IDS[#CORPSE_INVENTORY_IDS + 1] = candidate
+  end
+end
+
+local function corpse_inventory(corpse, inventory_id)
+  local ok, inventory = pcall(function() return corpse.get_inventory(inventory_id) end)
+  if ok then return inventory end
+  return nil
+end
+
+local function capture_corpse(s)
+  local lifecycle = s.lifecycle
+  if not lifecycle or not lifecycle.death_position or not lifecycle.death_surface_index then return 0 end
+  local surface = game.surfaces[lifecycle.death_surface_index]
+  if not surface then return 0 end
+  local bags, moved = recovery_bags(s), 0
+  local corpses = surface.find_entities_filtered({
+    position = lifecycle.death_position, radius = CORPSE_RADIUS, type = "character-corpse",
+  })
+  for _, corpse in pairs(corpses) do
+    if corpse.valid then
+      local before = moved
+      for _, inventory_id in ipairs(CORPSE_INVENTORY_IDS) do
+        local inventory = corpse_inventory(corpse, inventory_id)
+        if inventory then moved = moved + store_inventory(inventory, bags) end
+      end
+      if moved > before then
+        -- Only remove the corpse once nothing is left, so a full recovery bag never eats items.
+        local remaining = 0
+        for _, inventory_id in ipairs(CORPSE_INVENTORY_IDS) do
+          local inventory = corpse_inventory(corpse, inventory_id)
+          if inventory then remaining = remaining + inventory.get_item_count() end
+        end
+        if remaining == 0 then corpse.destroy() end
+      end
     end
   end
   return moved
@@ -195,6 +243,7 @@ function M.on_died(s, event)
   s.lifecycle.respawn_at, s.lifecycle.death_position = game.tick + RESPAWN_DELAY, entity.position
   s.lifecycle.death_surface_index = entity.surface.index
   s.lifecycle.recovered_items = (s.lifecycle.recovered_items or 0) + moved
+  s.lifecycle.corpse_attempts, s.lifecycle.corpse_captured = 0, false
   s.agent, s.agent_unit_number = nil, nil
   append_event(s, "agent_died", {
     cause = event.cause and event.cause.name or nil,
@@ -207,6 +256,25 @@ end
 
 function M.tick(s)
   local lifecycle = s.lifecycle
+  -- The corpse only carries the inventory from the tick after death, so collect it here rather
+  -- than inside on_entity_died. Bounded by attempts, independent of tick clock resets on load.
+  if lifecycle and lifecycle.death_position and not lifecycle.corpse_captured then
+    local moved = capture_corpse(s)
+    if moved > 0 then
+      lifecycle.corpse_captured = true
+      lifecycle.recovered_items = (lifecycle.recovered_items or 0) + moved
+      append_event(s, "agent_loot_recovered", {
+        recovered_items = moved, death_count = lifecycle.death_count or 0,
+        total_recovered = lifecycle.recovered_items,
+      })
+    else
+      lifecycle.corpse_attempts = (lifecycle.corpse_attempts or 0) + 1
+      if lifecycle.corpse_attempts > CORPSE_CAPTURE_TICKS then
+        lifecycle.corpse_captured = true
+        append_event(s, "agent_loot_unavailable", {death_count = lifecycle.death_count or 0})
+      end
+    end
+  end
   if s.agent and s.agent.valid and lifecycle
     and game.tick - (lifecycle.last_recovery_restore_tick or 0) >= 60 then
     lifecycle.last_recovery_restore_tick = game.tick
