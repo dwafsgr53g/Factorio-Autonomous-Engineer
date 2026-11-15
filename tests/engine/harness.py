@@ -23,17 +23,24 @@ TESTDIR = Path(os.environ.get("FACTORIO_TEST_DIR", ROOT / ".runtime" / "factorio
 FACTORIO = Path(os.environ.get(
     "FACTORIO_BIN",
     r"C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"))
-PASSWORD = os.environ.get("FACTORIO_RCON_PASSWORD", "aetest-7f3c9-local")
+def password() -> str:
+    """RCON password of the local test server; never stored in the repository."""
+    value = os.environ.get("FACTORIO_RCON_PASSWORD")
+    if not value:
+        raise SystemExit(
+            "FACTORIO_RCON_PASSWORD must be set to the RCON password of the test server")
+    return value
+
 SAVES = TESTDIR / "saves"
 
 __all__ = ["Bridge", "BridgeError", "TaskRunner", "bridge", "lua", "agent_lua", "lua_json",
-           "status",
+           "status", "password",
            "wait", "start_server", "stop_server", "load_scenario_save", "save_as",
            "give_kit", "spawn_attackers", "clear_enemies", "snapshot", "pretty"]
 
 
 def bridge() -> Bridge:
-    return Bridge(PASSWORD, "127.0.0.1", 27075)
+    return Bridge(password(), "127.0.0.1", 27075)
 
 
 def lua(code: str, b: Bridge | None = None) -> str:
@@ -88,7 +95,7 @@ def start_server(save: str, *, wait_port: float = 60) -> None:
          "--mod-directory", str(TESTDIR / "mods"),
          "--start-server", str(SAVES / save),
          "--server-settings", str(TESTDIR / "config" / "server-settings.json"),
-         "--rcon-bind", "127.0.0.1:27075", "--rcon-password", PASSWORD],
+         "--rcon-bind", "127.0.0.1:27075", "--rcon-password", password()],
         stdout=log, stderr=subprocess.STDOUT, cwd=str(TESTDIR),
     )
     deadline = time.monotonic() + wait_port

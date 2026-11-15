@@ -20,8 +20,9 @@ fast and engine-free.
      saves/baseline.zip         # disposable map, created with the test mod set
    ```
 
-   `FACTORIO_TEST_DIR` overrides the location, `FACTORIO_RCON_PASSWORD` the RCON password
-   (default `aetest-7f3c9-local`).
+   `FACTORIO_TEST_DIR` overrides the location. `FACTORIO_RCON_PASSWORD` is **required** — the
+   password is never stored in the repository, so export it before running a scenario and use the
+   same value in the server command line below.
 
 3. RCON must be enabled **on the command line**. A `"rcon"` block in `server-settings.json` is
    ignored by 2.1.24 and the server then starts without a listener:
