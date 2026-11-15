@@ -67,6 +67,35 @@ def create_server(bridge: Bridge) -> MCPServer:
         return json.dumps(result, ensure_ascii=False)
 
     @server.tool()
+    async def plan_layout(goal_item: str) -> str:
+        """Plan a minimal deterministic module layout for a production goal.
+
+        The model supplies only an item goal. Dependency resolution, candidate sites,
+        collisions, orientations and the plan fingerprint are computed inside the mod.
+        Creating a plan never creates entities and never spends items.
+        """
+        try:
+            response = await asyncio.to_thread(bridge.call, "plan_layout",
+                                               {"goal_item": goal_item})
+        except (BridgeError, OSError) as exc:
+            raise ToolError(str(exc)) from exc
+        return json.dumps(response.get("result", response), ensure_ascii=False)
+
+    @server.tool()
+    async def apply_layout(plan_id: str) -> str:
+        """Revalidate a persisted plan and create only validated module ghosts.
+
+        Paid construction, material transfer and clearing remain the existing
+        assist_construction objective. A stale or conflicting plan is refused safely.
+        """
+        try:
+            response = await asyncio.to_thread(bridge.call, "apply_layout",
+                                               {"plan_id": plan_id})
+        except (BridgeError, OSError) as exc:
+            raise ToolError(str(exc)) from exc
+        return json.dumps(response.get("result", response), ensure_ascii=False)
+
+    @server.tool()
     async def get_agent_status() -> str:
         """Return compact health, lifecycle, safety, task and inventory summary."""
         try:

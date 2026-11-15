@@ -90,6 +90,10 @@ function M.context(s)
   if not surface.platform then
     capabilities[#capabilities + 1] = "gather_resource"
     capabilities[#capabilities + 1] = "assist_construction"
+    -- High-level Layout Planner intent. It remains deterministic Lua: the model names a
+    -- production goal or an existing plan ID, never coordinates or module placements.
+    capabilities[#capabilities + 1] = "plan_layout"
+    capabilities[#capabilities + 1] = "apply_layout"
   end
 
   return {

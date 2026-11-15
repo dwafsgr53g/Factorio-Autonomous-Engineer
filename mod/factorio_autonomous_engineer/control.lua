@@ -6,6 +6,7 @@ local site_selector = require("lib.site_selector")
 local construction = require("lib.construction")
 local modules = require("lib.modules")
 local module_placer = require("lib.module_placer")
+local layout_planner = require("lib.layout_planner")
 
 local function state()
   storage.autonomous_engineer = storage.autonomous_engineer or {
@@ -19,9 +20,12 @@ operations.ping = function(s)
   return {mod_version = "0.1.0-dev", factorio_version = script.active_mods.base,
     agent_state = lifecycle.status(s),
     capabilities = {"get_briefing", "select_starting_site", "gather_resource",
-      "assist_construction", "safety", "respawn"}}
+      "assist_construction", "plan_layout", "apply_layout", "safety", "respawn"}}
 end
 operations.strategy_context = function(s) return strategy.context(s) end
+-- Internal administrative helper used by the engine harness and future code-owned site
+-- selection. It is not a model-facing MCP tool and does not expose coordinates to the LLM.
+operations.set_home = function(s, p) return lifecycle.set_home(s, p) end
 operations.select_starting_site = function(s)
   local context = strategy.context(s)
   assert(context.stage.id == "early_game" or context.stage.id == "automation_bootstrap",
@@ -109,6 +113,46 @@ operations.module_instance_status = function(s, p)
 end
 operations.module_instances = function(s, p)
   return {ok = true, instances = module_placer.instances(s)}
+end
+
+-- Internal Layout Planner surface. The create/apply operations expose full internal
+-- placement data for engine tests; the model-facing plan_layout/apply_layout operations
+-- below return compact summaries without coordinates, entity lists or ports.
+operations.layout_plan_create = function(s, p)
+  assert(not (s.safety and s.safety.active), "Safety controller is active")
+  return layout_planner.create(s, p)
+end
+operations.layout_plan_apply = function(s, p)
+  assert(not (s.safety and s.safety.active), "Safety controller is active")
+  return layout_planner.apply(s, p)
+end
+operations.layout_plan_status = function(s, p)
+  return layout_planner.status(s, p.plan_id)
+end
+operations.layout_plans = function(s, p)
+  return {ok = true, plans = layout_planner.plans(s)}
+end
+operations.layout_planner_limits = function(s, p)
+  return {ok = true, limits = layout_planner.limits()}
+end
+
+local function require_capability(s, capability)
+  local context = strategy.context(s)
+  for _, available in pairs(context.available_capabilities) do
+    if available == capability then return end
+  end
+  error("Requested capability is not available in the current domain")
+end
+
+operations.plan_layout = function(s, p)
+  require_capability(s, "plan_layout")
+  local result = layout_planner.create(s, p)
+  if not result.ok then return result end
+  return layout_planner.public_summary(result.plan)
+end
+operations.apply_layout = function(s, p)
+  require_capability(s, "apply_layout")
+  return layout_planner.public_apply_summary(layout_planner.apply(s, p))
 end
 operations.task_status = function(s, p) return tasks.status(s, p.task_id) end
 operations.task_cancel = function(s, p)

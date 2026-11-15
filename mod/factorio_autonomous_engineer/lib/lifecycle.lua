@@ -317,6 +317,7 @@ function M.status(s)
     unit_number = agent and agent.unit_number or nil,
     surface = agent and agent.surface.name or nil,
     position = agent and agent.position or (s.lifecycle and s.lifecycle.death_position) or nil,
+    home = s.home and s.home.position or nil,
     health = agent and agent.health or nil,
     death_count = s.lifecycle and s.lifecycle.death_count or 0,
     respawn_at_tick = s.lifecycle and s.lifecycle.respawn_at or nil,

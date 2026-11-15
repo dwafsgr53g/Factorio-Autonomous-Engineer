@@ -183,6 +183,47 @@ local function find_live_entity(surface, unit_number, position)
   return nil
 end
 
+local function ghost_records(surface, area, ignore_plan_id)
+  local ghosts = {}
+  for _, entity in pairs(surface.find_entities_filtered{
+    area = area, type = "entity-ghost"}) do
+    if entity.valid then
+      local plan_tag = entity.tags and entity.tags.ae_plan_id or nil
+      if not (ignore_plan_id and plan_tag == ignore_plan_id) then
+        ghosts[#ghosts + 1] = {name = entity.ghost_name, position = entity.position,
+          unit_number = entity.unit_number, plan_id = plan_tag}
+      end
+    end
+  end
+  return ghosts
+end
+
+local function overlaps_live_instance(s, surface, anchor, footprint, ignore_instance_keys)
+  for _, existing in pairs(s.modules and s.modules.instances or {}) do
+    local existing_surface = game.surfaces[existing.surface_index]
+    if not (ignore_instance_keys and ignore_instance_keys[existing.key])
+      and existing_surface == surface then
+      local ex_left = existing.anchor.x - 0.5
+      local ex_top = existing.anchor.y - 0.5
+      local ex_right = existing.anchor.x + existing.footprint.width + 0.5
+      local ex_bottom = existing.anchor.y + existing.footprint.height + 0.5
+      if anchor.x < ex_right and ex_left < anchor.x + footprint.width
+        and anchor.y < ex_bottom and ex_top < anchor.y + footprint.height then
+        -- Only live instances with at least one ghost or real entity block the area.
+        for _, entity in ipairs(existing.entities) do
+          local live = find_live_entity(existing_surface, entity.unit_number, entity.position)
+          if (live and live.valid and live.type == "entity-ghost")
+            or construction.find_real_entity(existing_surface, entity.name,
+              entity.position) then
+            return true
+          end
+        end
+      end
+    end
+  end
+  return false
+end
+
 local function instance_status(s, instance)
   local surface = game.surfaces[instance.surface_index]
   local entities, counts = {}, {pending = 0, built = 0, missing = 0,
@@ -252,14 +293,23 @@ function M.resolve(s, p)
   if p.surface and p.surface ~= surface.name then
     return nil, "module_instances_use_agent_surface"
   end
-  local env = {
-    prototypes = prototypes, force = agent.force, surface = surface,
-    stage = p.stage,
-  }
-  local entry, errors = modules.resolve(env, p.module_id)
-  if not entry then return nil, "module_not_found", errors end
-  if not entry.availability.available then
-    return nil, "module_unavailable", entry.availability.reasons
+  local entry, errors
+  if p.definition then
+    -- Internal planning path: the catalog was already loaded and validated once. No
+    -- second definition source exists; this only avoids re-running the catalog scan for
+    -- every bounded placement candidate.
+    entry = {definition = p.definition, availability = {available = true},
+      availability_reasons = {}}
+  else
+    local env = {
+      prototypes = prototypes, force = agent.force, surface = surface,
+      stage = p.stage,
+    }
+    entry, errors = modules.resolve(env, p.module_id)
+    if not entry then return nil, "module_not_found", errors end
+    if not entry.availability.available then
+      return nil, "module_unavailable", entry.availability.reasons
+    end
   end
   if type(p.anchor) ~= "table" or type(p.anchor.x) ~= "number"
     or type(p.anchor.y) ~= "number" then
@@ -300,6 +350,69 @@ function M.resolve(s, p)
     absolute_bounds = absolute_bounds(anchor, expanded.footprint),
     entities = entities, ports = ports, reserved = reserved,
     cost_estimate = format.cost_estimate(entry.definition, p.parameters or {}, orientation),
+  }
+end
+
+-- Pure, non-mutating world validation for a module placement. The Layout Planner uses
+-- this for bounded candidate evaluation; it creates no ghost and changes no state.
+function M.evaluate(s, p)
+  local resolved, reason, details = M.resolve(s, p)
+  if not resolved then
+    return {ok = false, reason = reason, details = details}
+  end
+  local agent = s.agent
+  local surface = agent.surface
+  local bounds = resolved.absolute_bounds
+  local clearable, blocking = scan_obstacles(surface, {bounds[1], bounds[2]}, agent)
+  local players, hard_blocking = {}, {}
+  local function classify(entity)
+    if entity.type == "character" then
+      players[#players + 1] = entity
+    else
+      hard_blocking[#hard_blocking + 1] = entity
+    end
+  end
+  for _, entity in ipairs(blocking) do classify(entity) end
+  for _, area in ipairs(resolved.reserved) do
+    local found_clearable, found_blocking = scan_obstacles(surface, area.area, agent)
+    for _, entity in ipairs(found_clearable) do clearable[#clearable + 1] = entity end
+    for _, entity in ipairs(found_blocking) do classify(entity) end
+  end
+  local ghost_conflicts = ghost_records(surface, {bounds[1], bounds[2]}, p.ignore_plan_id)
+  for _, area in ipairs(resolved.reserved) do
+    for _, ghost in ipairs(ghost_records(surface, area.area, p.ignore_plan_id)) do
+      ghost_conflicts[#ghost_conflicts + 1] = ghost
+    end
+  end
+  local failures = check_placement_constraints(resolved.definition, {
+    surface = surface, anchor = resolved.anchor, absolute_bounds = bounds,
+  }, {absolute_bounds = bounds})
+  local terrain_failures = {}
+  for _, entity in ipairs(resolved.entities) do
+    local can_place = surface.can_place_entity{
+      name = entity.name, position = entity.position, direction = entity.direction,
+      force = agent.force, build_check_type = defines.build_check_type.script_ghost,
+    }
+    if not can_place then terrain_failures[#terrain_failures + 1] = entity.name end
+  end
+  local overlap = overlaps_live_instance(s, surface, resolved.anchor, resolved.footprint,
+    p.ignore_instance_keys)
+  local ok = #hard_blocking == 0 and #ghost_conflicts == 0 and #players == 0
+    and #failures == 0 and not overlap
+    and not (#terrain_failures > 0 and #clearable == 0)
+  local first_reason = nil
+  if overlap then first_reason = "module_instance_overlap"
+  elseif #hard_blocking > 0 then first_reason = "blocked_by_existing_entity"
+  elseif #ghost_conflicts > 0 then first_reason = "existing_ghost"
+  elseif #players > 0 then first_reason = "player_in_footprint"
+  elseif #failures > 0 then first_reason = "constraint_failed"
+  elseif #terrain_failures > 0 and #clearable == 0 then first_reason = "blocked_terrain" end
+  return {
+    ok = ok, reason = first_reason, resolved = resolved,
+    clearable = clearable, blocking = hard_blocking, players = players,
+    ghosts = ghost_conflicts, constraint_failures = failures,
+    terrain_failures = terrain_failures, module_instance_overlap = overlap,
+    needs_clearing = #clearable > 0,
   }
 end
 
@@ -402,28 +515,8 @@ function M.instantiate(s, p)
 
   -- Reject overlapping module instances even though other ghosts are ignored by the
   -- generic obstacle scan. This prevents two independent instances sharing a site.
-  for _, existing in pairs(s.modules.instances) do
-    local existing_surface = game.surfaces[existing.surface_index]
-    if existing_surface == surface then
-      local ex_left = existing.anchor.x - 0.5
-      local ex_top = existing.anchor.y - 0.5
-      local ex_right = existing.anchor.x + existing.footprint.width + 0.5
-      local ex_bottom = existing.anchor.y + existing.footprint.height + 0.5
-      if anchor.x < ex_right and ex_left < anchor.x + expanded.footprint.width
-        and anchor.y < ex_bottom and ex_top < anchor.y + expanded.footprint.height then
-        local should_reject = false
-        -- Only live instances with at least one ghost or real entity block the area.
-        for _, entity in ipairs(existing.entities) do
-          local live = find_live_entity(existing_surface, entity.unit_number, entity.position)
-          if (live and live.valid and live.type == "entity-ghost")
-            or construction.find_real_entity(existing_surface, entity.name, entity.position) then
-            should_reject = true
-            break
-          end
-        end
-        if should_reject then return nil, "module_instance_overlap" end
-      end
-    end
+  if overlaps_live_instance(s, surface, anchor, expanded.footprint) then
+    return nil, "module_instance_overlap"
   end
 
   s.modules.next_instance_id = (s.modules.next_instance_id or 0) + 1
@@ -436,6 +529,7 @@ function M.instantiate(s, p)
       ae_instance_key = key,
       ae_entity_id = entity.id,
     }
+    if p.plan_id then tags.ae_plan_id = p.plan_id end
     if entity.recipe then tags.ae_recipe = entity.recipe end
     local ok, ghost = pcall(function()
       return surface.create_entity{
