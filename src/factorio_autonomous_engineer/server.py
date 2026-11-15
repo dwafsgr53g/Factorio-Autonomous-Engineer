@@ -47,7 +47,8 @@ def create_server(bridge: Bridge) -> MCPServer:
     async def execute_task(task: Literal["gather_resource", "assist_construction",
                                           "build_logistics"],
                            resource: str | None = None, amount: int | None = None,
-                           goal_item: str | None = None) -> str:
+                           goal_item: str | None = None,
+                           mode: Literal["linear_chain", "multi_consumer"] | None = None) -> str:
         """Execute one high-level objective.
 
         gather_resource needs resource and amount. assist_construction discovers pending
@@ -65,7 +66,8 @@ def create_server(bridge: Bridge) -> MCPServer:
                 raise ToolError("amount must be a positive integer")
             spec = {"task": task, "resource": resource, "amount": amount}
         elif task == "build_logistics":
-            spec = {"task": task, "goal_item": goal_item or "iron-gear-wheel"}
+            spec = {"task": task, "goal_item": goal_item or "iron-gear-wheel",
+                    "mode": mode or "linear_chain"}
         else:
             spec = {"task": task}
         try:

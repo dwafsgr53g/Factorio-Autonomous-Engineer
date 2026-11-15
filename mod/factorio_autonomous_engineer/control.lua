@@ -8,6 +8,7 @@ local modules = require("lib.modules")
 local module_placer = require("lib.module_placer")
 local layout_planner = require("lib.layout_planner")
 local logistics = require("lib.logistics")
+local transport = require("lib.transport")
 
 local function state()
   storage.autonomous_engineer = storage.autonomous_engineer or {
@@ -140,6 +141,30 @@ operations.logistics_plan_debug = function(s, p)
   local ok, result = xpcall(function() return logistics.plan(s, p) end, debug.traceback)
   return {ok = ok, result = ok and result or nil, traceback = not ok and result or nil}
 end
+operations.logistics_plan_expansion = function(s, p)
+  assert(not (s.safety and s.safety.active), "Safety controller is active")
+  return logistics.plan_expansion(s, p)
+end
+-- Internal geometry probe used by the Stage-7 engine scenarios. It plans no world
+-- change and never mutates a transport line.
+operations.transport_probe = function(s, p)
+  local out = {ok = true}
+  if p.splitter then
+    out.splitter = transport.splitter_geometry(
+      {x = p.splitter.x, y = p.splitter.y}, p.splitter.direction or 4)
+  end
+  if p.underground then
+    local entrance = {x = p.underground.x, y = p.underground.y}
+    local pair, reason = transport.underground_pair(
+      p.underground.name or "underground-belt", entrance,
+      p.underground.direction or 8, p.underground.distance or 2)
+    out.pair = pair
+    out.pair_reason = reason
+    out.max_distance = transport.underground_max_distance(
+      p.underground.name or "underground-belt")
+  end
+  return out
+end
 operations.logistics_ghosts_place = function(s, p)
   assert(not (s.safety and s.safety.active), "Safety controller is active")
   return logistics.place_ghosts(s, p)
@@ -204,7 +229,10 @@ operations.task_debug = function(s, p)
     target_ghost = pos(task.target_ghost), target_chest = pos(task.target_chest),
     path_request = task.path_request, path_index = task.path_index,
     agent = pos(s.agent), pending = pending,
-    scan_dirty = task.scan_dirty, last_scan_tick = task.last_scan_tick}
+    scan_dirty = task.scan_dirty, last_scan_tick = task.last_scan_tick,
+    route_invalid_since = task.route_invalid_since,
+    verify_started_tick = task.verify_started_tick,
+    started_tick = task.started_tick}
 end
 operations.task_entries = function(s, p)
   local task = s.task

@@ -453,6 +453,18 @@ function M.instantiate(s, p)
   local fingerprint = entry.definition.id .. "|" .. tostring(anchor.x) .. ","
     .. tostring(anchor.y) .. "|" .. tostring(orientation) .. "|"
     .. sorted_parameter_string(expanded.parameters)
+  -- A stale persisted instance whose ghosts and real entities are both gone must not
+  -- suppress a fresh ghost creation. This matters after a save was made from a world
+  -- where a test fixture removed its ghosts, and after a player cancels a module.
+  local function forget_instance(existing)
+    s.modules.by_key[existing.key] = nil
+    for index = #s.modules.instances, 1, -1 do
+      if s.modules.instances[index] == existing then
+        table.remove(s.modules.instances, index)
+        break
+      end
+    end
+  end
   if p.instance_key then
     local existing = s.modules.by_key[p.instance_key]
     if existing then
@@ -460,13 +472,20 @@ function M.instantiate(s, p)
         return nil, "instance_key_conflict"
       end
       local status = instance_status(s, existing)
-      return {deduplicated = true, instance = status, fingerprints = fingerprint}
+      if status.status ~= "missing" then
+        return {deduplicated = true, instance = status, fingerprints = fingerprint}
+      end
+      forget_instance(existing)
     end
   end
   for _, existing in pairs(s.modules.instances) do
     if existing.fingerprint == fingerprint then
       local status = instance_status(s, existing)
-      return {deduplicated = true, instance = status, fingerprints = fingerprint}
+      if status.status ~= "missing" then
+        return {deduplicated = true, instance = status, fingerprints = fingerprint}
+      end
+      forget_instance(existing)
+      break
     end
   end
 

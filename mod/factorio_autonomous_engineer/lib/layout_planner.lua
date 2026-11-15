@@ -801,7 +801,11 @@ local function finalize_plan(s, p, graph, modules_plan, placed_by_node, center, 
     logistics = p.logistics_chain and {
       mode = "linear_chain", belt_row = p.logistics_belt_row,
       flow = "east", supported = true,
-    } or nil,
+    } or (p.multi_consumer and {
+      mode = "multi_consumer", flow = "east",
+      cell = p.multi_consumer_cell, supported = true,
+      consumers = 2, producers = 2, junctions = 5, underground_pairs = 1,
+    }) or nil,
   }
   plan.fingerprint = digest(canonical_plan_text(plan))
   local environment_signature = M.environment_signature(s, plan)
@@ -1007,8 +1011,351 @@ function M.create_logistics_chain(s, p)
     graph.order, {})
 end
 
+-- Stage-7 multi-consumer expansion mode. It places two furnaces and two gear
+-- assemblers around one mining drill with exact physical gaps for a branching and
+-- merging belt network. The module format and the plan format are the same as Stage 5/6;
+-- only the internal composition and the persisted logistics metadata differ.
+local MULTI_CELL = {
+  modules = {
+    {id = "mining_1", module_id = "nauvis.electric_mining.iron", offset = {x = 0, y = 0}},
+    {id = "smelting_1", module_id = "nauvis.stone_furnace.iron_smelting", offset = {x = 10, y = 0}},
+    {id = "smelting_2", module_id = "nauvis.stone_furnace.iron_smelting", offset = {x = 10, y = 6}},
+    {id = "production_1", module_id = "nauvis.assembling_machine_1.gear", offset = {x = 21, y = 0}},
+    {id = "production_2", module_id = "nauvis.assembling_machine_1.gear", offset = {x = 21, y = 5}},
+  },
+  junctions = {
+    {id = "ore_split", offset = {x = 6, y = 1}, direction = 4, kind = "split"},
+    {id = "plate_merge", offset = {x = 15, y = 1}, direction = 4, kind = "merge"},
+    {id = "plate_split", offset = {x = 18, y = 1}, direction = 4, kind = "split"},
+    {id = "gear_merge", offset = {x = 27, y = 1}, direction = 4, kind = "merge"},
+    {id = "coal_split", offset = {x = 7, y = -2}, direction = 4, kind = "split"},
+  },
+  underground = {offset = {x = 8, y = 0}, direction = 8, distance = 2},
+  coal_chest_offset = {x = 4, y = -2},
+  output_chest_offset = {x = 30, y = 1},
+  cell_bounds = {left = 0, top = -2, right = 32, bottom = 10},
+}
+
+-- Wider deterministic resource-patch sampling for the multi-consumer cell. The Stage-6
+-- chain may already occupy the nearest 24 ore tiles; sampling the whole bounded patch lets
+-- the expansion choose a clear parallel site instead of declaring the patch unavailable.
+local function multi_resource_candidates(surface, center, definition, orientations)
+  local candidates, seen = {}, {}
+  local constraints = resource_constraints(definition)
+  if #constraints == 0 then return candidates end
+  local max_radius = PLAN_RADIUS
+  for _, constraint in ipairs(constraints) do
+    local resources = surface.find_entities_filtered{
+      area = {{center.x - max_radius, center.y - max_radius},
+        {center.x + max_radius, center.y + max_radius}},
+      name = constraint.resource, type = "resource",
+    }
+    table.sort(resources, function(a, b)
+      local da, db = distance(a.position, center), distance(b.position, center)
+      if math.abs(da - db) > 1e-9 then return da < db end
+      if a.position.x ~= b.position.x then return a.position.x < b.position.x end
+      if a.position.y ~= b.position.y then return a.position.y < b.position.y end
+      return (a.unit_number or 0) < (b.unit_number or 0)
+    end)
+    local offsets = {
+      {x = 0, y = 0}, {x = -1, y = 0}, {x = 1, y = 0}, {x = 0, y = -1},
+      {x = 0, y = 1}, {x = -1, y = -1}, {x = 1, y = -1}, {x = -1, y = 1},
+      {x = 1, y = 1}, {x = -2, y = 0}, {x = 2, y = 0}, {x = 0, y = -2},
+      {x = 0, y = 2}, {x = -3, y = 0}, {x = 3, y = 0}, {x = 0, y = -3},
+      {x = 0, y = 3},
+    }
+    local seeds = math.min(#resources, 180)
+    for index = 1, seeds do
+      local resource = resources[index]
+      for _, orientation in ipairs(orientations) do
+        local expanded = format.expand(definition, {}, orientation)
+        if expanded then
+          local width, height = expanded.footprint.width, expanded.footprint.height
+          local base = {
+            x = math.floor(resource.position.x - width / 2),
+            y = math.floor(resource.position.y - height / 2),
+          }
+          for _, offset in ipairs(offsets) do
+            local anchor = {x = base.x + offset.x, y = base.y + offset.y}
+            local key = tostring(anchor.x) .. "," .. tostring(anchor.y) .. ","
+              .. tostring(orientation)
+            if not seen[key] then
+              seen[key] = true
+              local anchor_center = {x = anchor.x + width / 2, y = anchor.y + height / 2}
+              candidates[#candidates + 1] = {
+                anchor = anchor, orientation = orientation,
+                footprint = {width = width, height = height},
+                center_distance = math.abs(anchor_center.x - center.x)
+                  + math.abs(anchor_center.y - center.y),
+                focus_distance = math.abs(anchor_center.x - center.x)
+                  + math.abs(anchor_center.y - center.y),
+              }
+            end
+          end
+        end
+      end
+    end
+  end
+  table.sort(candidates, function(a, b)
+    local sa = (a.focus_distance or 0) * 4 + (a.center_distance or 0)
+    local sb = (b.focus_distance or 0) * 4 + (b.center_distance or 0)
+    if sa ~= sb then return sa < sb end
+    if a.anchor.x ~= b.anchor.x then return a.anchor.x < b.anchor.x end
+    return a.anchor.y < b.anchor.y
+  end)
+  while #candidates > 480 do table.remove(candidates) end
+  return candidates
+end
+
+local function multi_cell_metadata(anchor)
+  local function absolute(offset)
+    return {x = anchor.x + offset.x, y = anchor.y + offset.y}
+  end
+  local modules, junctions = {}, {}
+  for _, entry in ipairs(MULTI_CELL.modules) do
+    modules[entry.id] = absolute(entry.offset)
+  end
+  for _, entry in ipairs(MULTI_CELL.junctions) do
+    junctions[entry.id] = {anchor = absolute(entry.offset), direction = entry.direction,
+      kind = entry.kind}
+  end
+  return {
+    mining_anchor = {x = anchor.x, y = anchor.y},
+    modules = modules, junctions = junctions,
+    underground = {entrance = absolute(MULTI_CELL.underground.offset),
+      direction = MULTI_CELL.underground.direction, distance = MULTI_CELL.underground.distance},
+    coal_chest_tile = absolute(MULTI_CELL.coal_chest_offset),
+    output_chest_tile = absolute(MULTI_CELL.output_chest_offset),
+    bounds = {left = anchor.x + MULTI_CELL.cell_bounds.left,
+      top = anchor.y + MULTI_CELL.cell_bounds.top,
+      right = anchor.x + MULTI_CELL.cell_bounds.right,
+      bottom = anchor.y + MULTI_CELL.cell_bounds.bottom},
+  }
+end
+
+local function multi_cell_edges()
+  return {
+    {kind = "item", from = "mining_1", from_port = "ore_output",
+      to = "smelting_1", to_port = "ore_input", item = "iron-ore",
+      status = "route_required"},
+    {kind = "item", from = "mining_1", from_port = "ore_output",
+      to = "smelting_2", to_port = "ore_input", item = "iron-ore",
+      status = "route_required"},
+    {kind = "item", from = "smelting_1", from_port = "plate_output",
+      to = "production_1", to_port = "plate_input", item = "iron-plate",
+      status = "route_required"},
+    {kind = "item", from = "smelting_2", from_port = "plate_output",
+      to = "production_2", to_port = "plate_input", item = "iron-plate",
+      status = "route_required"},
+    {kind = "item", from = "production_1", from_port = "gear_output",
+      to = "requested_output", to_port = "gear_output", item = "iron-gear-wheel",
+      status = "route_required"},
+    {kind = "item", from = "production_2", from_port = "gear_output",
+      to = "requested_output", to_port = "gear_output", item = "iron-gear-wheel",
+      status = "route_required"},
+  }
+end
+
+local function rect_overlaps_strict(a, b)
+  return a[1].x < b[2].x and b[1].x < a[2].x and a[1].y < b[2].y and b[1].y < a[2].y
+end
+
+-- A Stage-7 expansion cell is a large physical area. Site selection rejects a candidate
+-- whose entire cell rectangle contains an existing building, ghost or character. Resources,
+-- loose items and clearable trees/rocks are not hard blockers. This keeps a new parallel
+-- cell from being planned through a working factory or a player's construction work.
+local function multi_cell_occupied(surface, bounds, agent)
+  local entities = surface.find_entities_filtered{
+    area = {{bounds.left, bounds.top}, {bounds.right, bounds.bottom}},
+  }
+  for _, entity in pairs(entities) do
+    if entity.valid then
+      local is_agent = agent and entity.unit_number and agent.unit_number
+        and entity.unit_number == agent.unit_number
+      if not is_agent then
+        local kind = entity.type
+        if kind ~= "resource" and kind ~= "item-entity" and kind ~= "corpse"
+          and kind ~= "smoke" and kind ~= "fish" then
+          if kind == "character" or kind == "entity-ghost" then return true end
+          if not clearing.is_clearable(entity) then return true end
+        end
+      end
+    end
+  end
+  return false
+end
+
+function M.create_multi_consumer(s, p)
+  local agent = s.agent
+  assert(agent and agent.valid, "Agent is not alive")
+  assert(not (s.safety and s.safety.active), "Safety controller is active")
+  assert(type(p.goal_item) == "string" and p.goal_item ~= "",
+    "goal_item must be a non-empty string")
+  local surface = agent.surface
+  local center = plan_center(s, agent)
+  local context = strategy.context(s)
+  local env = {
+    prototypes = prototypes, force = agent.force, surface = surface,
+    stage = context.stage.id,
+  }
+  local graph, error_record = production_graph.resolve(env, p.goal_item)
+  if not graph then
+    return {ok = false, reason = error_record and error_record.code or "goal_unresolved",
+      message = error_record and error_record.message or nil}
+  end
+  if not p.force_new then
+    local candidates = {}
+    for _, existing in pairs(s.layout_plans and s.layout_plans.by_id or {}) do
+      if existing.goal_item == p.goal_item and existing.logistics
+        and existing.logistics.mode == "multi_consumer" and existing.materializable then
+        candidates[#candidates + 1] = existing
+      end
+    end
+    table.sort(candidates, function(a, b)
+      if a.created_tick ~= b.created_tick then return a.created_tick > b.created_tick end
+      return a.id < b.id
+    end)
+    for _, existing in ipairs(candidates) do
+      local revalidation = M.revalidate(s, existing)
+      if revalidation.valid then return {ok = true, plan = existing, reused = true} end
+    end
+  end
+  local catalog = modules.load(env)
+  local definitions = {}
+  for _, entry in ipairs(MULTI_CELL.modules) do
+    local catalog_entry = catalog.by_id[entry.module_id]
+    if not catalog_entry then
+      return {ok = false, reason = "module_definition_missing",
+        message = entry.module_id}
+    end
+    definitions[entry.id] = {definition = catalog_entry.definition,
+      available = catalog_entry.availability and catalog_entry.availability.available}
+  end
+  local mining_definition = definitions.mining_1.definition
+  local mining_candidates = multi_resource_candidates(surface, center, mining_definition, {0})
+  local best, last_reason = nil, "no_candidate"
+  for _, candidate in ipairs(mining_candidates) do
+    local early_meta = multi_cell_metadata(candidate.anchor)
+    local early_bounds = early_meta.bounds
+    local early_ok = early_bounds.left >= center.x - PLAN_RADIUS
+      and early_bounds.right <= center.x + PLAN_RADIUS
+      and early_bounds.top >= center.y - PLAN_RADIUS
+      and early_bounds.bottom <= center.y + PLAN_RADIUS
+      and not multi_cell_occupied(surface, early_bounds, agent)
+    if not early_ok then
+      last_reason = "cell_outside_work_area_or_occupied"
+    else
+    local placed_modules, placed_by_node = {}, {}
+    local valid = true
+    local clearing_count = 0
+    for _, entry in ipairs(MULTI_CELL.modules) do
+      local anchor = {x = candidate.anchor.x + entry.offset.x,
+        y = candidate.anchor.y + entry.offset.y}
+      local definition = definitions[entry.id].definition
+      local evaluated = module_placer.evaluate(s, {
+        definition = definition, module_id = entry.module_id,
+        anchor = anchor, orientation = 0, parameters = {},
+      })
+      if not evaluated.ok then
+        valid = false
+        last_reason = evaluated.reason or "placement_invalid"
+        break
+      end
+      local node = {
+        id = entry.id, module_id = entry.module_id,
+        module_version = definition.module_version, name = definition.name,
+        category = definition.category, recipe = nil,
+      }
+      local record = build_module_record(node, {
+        resolved = evaluated.resolved, orientation = 0, anchor = anchor,
+        clearable = evaluated.clearable, score = 0, terms = {},
+      })
+      if not rect_inside_work_area(area_rect(record.bounds), center) then
+        valid = false
+        last_reason = "cell_outside_work_area"
+        break
+      end
+      for _, existing in ipairs(placed_modules) do
+        if rect_overlaps_strict(record.bounds, existing.bounds) then
+          valid = false
+          last_reason = "module_overlap"
+          break
+        end
+      end
+      if not valid then break end
+      for _, existing in ipairs(placed_modules) do
+        local reserved_boxes = {}
+        for _, reserved in ipairs(existing.reserved or {}) do
+          reserved_boxes[#reserved_boxes + 1] = reserved.area
+        end
+        for _, box in ipairs(reserved_boxes) do
+          if rect_overlaps_strict(record.bounds, box) then
+            valid = false
+            last_reason = "module_reserved_overlap"
+            break
+          end
+        end
+        if not valid then break end
+      end
+      if not valid then break end
+      placed_modules[#placed_modules + 1] = record
+      placed_by_node[entry.id] = record
+      for _, count in pairs(record.clearable or {}) do clearing_count = clearing_count + count end
+    end
+    if valid then
+      local metadata = multi_cell_metadata(candidate.anchor)
+      local bounds = metadata.bounds
+      if bounds.left < center.x - PLAN_RADIUS or bounds.right > center.x + PLAN_RADIUS
+        or bounds.top < center.y - PLAN_RADIUS or bounds.bottom > center.y + PLAN_RADIUS then
+        valid = false
+        last_reason = "cell_outside_work_area"
+      elseif multi_cell_occupied(surface, bounds, agent) then
+        valid = false
+        last_reason = "cell_area_occupied"
+      end
+    end
+    if valid then
+      local anchor_center = {x = candidate.anchor.x + 15, y = candidate.anchor.y + 3}
+      local score = math.abs(anchor_center.x - center.x) * 2
+        + math.abs(anchor_center.y - center.y) + clearing_count * M.SCORING.clearing_obstacle
+      if not best or score < best.score
+        or (score == best.score and candidate.anchor.x < best.anchor.x)
+        or (score == best.score and candidate.anchor.x == best.anchor.x
+          and candidate.anchor.y < best.anchor.y) then
+        best = {anchor = candidate.anchor, records = placed_modules,
+          placed_by_node = placed_by_node, score = score, clearing_count = clearing_count}
+      end
+    end
+    end
+  end
+  if not best then
+    return {ok = false, reason = "blocked_layout", message = last_reason}
+  end
+  local planning_graph = {
+    status = graph.status, nodes = {}, edges = multi_cell_edges(),
+    order = {}, consumers = graph.consumers, producers = graph.producers,
+    missing = graph.missing or {}, external_dependencies = graph.external_dependencies or {},
+    available_modules = graph.available_modules, selected_modules = graph.selected_modules,
+    throughput_analysis = graph.throughput_analysis,
+  }
+  for _, entry in ipairs(MULTI_CELL.modules) do
+    local record = best.placed_by_node[entry.id]
+    planning_graph.order[#planning_graph.order + 1] = entry.id
+    planning_graph.nodes[#planning_graph.nodes + 1] = {
+      id = entry.id, module_id = entry.module_id,
+      module_version = record.module_version, name = record.name,
+      category = record.category, recipe = record.recipe,
+    }
+  end
+  p.multi_consumer = true
+  p.multi_consumer_cell = multi_cell_metadata(best.anchor)
+  return finalize_plan(s, p, planning_graph, best.records, best.placed_by_node, center,
+    planning_graph.order, {})
+end
+
 function M.create(s, p)
   if p.logistics_chain then return M.create_logistics_chain(s, p) end
+  if p.multi_consumer then return M.create_multi_consumer(s, p) end
   local agent = s.agent
   assert(agent and agent.valid, "Agent is not alive")
   assert(not (s.safety and s.safety.active), "Safety controller is active")

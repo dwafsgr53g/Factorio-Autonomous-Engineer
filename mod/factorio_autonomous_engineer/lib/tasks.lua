@@ -20,6 +20,7 @@ local LOGISTICS_DEADLINE_TICKS = 60 * 60 * 30
 local LOGISTICS_CONSTRUCTION_RETRIES = 2
 local LOGISTICS_SETTLE_TICKS = 60 * 5
 local LOGISTICS_MONITOR_TICKS = 60 * 180
+local LOGISTICS_MULTI_MONITOR_TICKS = 60 * 300
 
 local function distance(a, b)
   local dx, dy = a.x - b.x, a.y - b.y
@@ -211,11 +212,33 @@ local function finish_logistics(s, task, status, reason)
   end
   local observation = verification and verification.observation or {}
   local connection_counts = {}
-  for _, record in ipairs(verification and verification.connection_statuses or {}) do
-    connection_counts[record.status] = (connection_counts[record.status] or 0) + 1
+  local connection_total = 0
+  local route_list = verification and verification.routes
+  if route_list then
+    for _, record in ipairs(route_list) do
+      local state = record.connected and "connected" or (record.status or "blocked")
+      connection_counts[state] = (connection_counts[state] or 0) + 1
+      connection_total = connection_total + 1
+    end
+  else
+    for _, record in ipairs(verification and verification.connection_statuses or {}) do
+      connection_counts[record.status] = (connection_counts[record.status] or 0) + 1
+      connection_total = connection_total + 1
+    end
   end
   local physical = task.logistics_plan_id and logistics.status(s, task.logistics_plan_id)
   local required_items = physical and physical.physical and physical.physical.required_items or {}
+  local consumers = verification and verification.consumers or nil
+  local consumer_connected = 0
+  local consumer_total = 0
+  if consumers then
+    for _, group in pairs(consumers) do
+      for _, supplied in pairs(group) do
+        consumer_total = consumer_total + 1
+        if supplied == true then consumer_connected = consumer_connected + 1 end
+      end
+    end
+  end
   task.status, task.reason, task.finished_tick = status, reason, game.tick
   task.result = {
     success = status == "succeeded", status = status, task_id = task.id,
@@ -223,8 +246,16 @@ local function finish_logistics(s, task, status, reason)
     layout_plan_id = task.layout_plan_id,
     logistics_plan_id = task.logistics_plan_id,
     logistics_status = physical and physical.physical and physical.physical.status or nil,
-    connections = connection_counts, connection_total = #(verification and
-      verification.connection_statuses or {}),
+    mode = task.mode or "linear_chain",
+    connections = connection_counts, connection_total = connection_total,
+    routes_connected = connection_counts.connected or 0,
+    routes_blocked = (connection_counts.blocked or 0),
+    consumers = consumers,
+    consumers_connected = consumer_connected,
+    consumers_total = consumer_total,
+    consumers_receiving = verification and verification.consumers_supplied and consumer_connected or 0,
+    production_active = verification and verification.production_active == true or false,
+    output_verified = verification and verification.output_verified == true or false,
     power_status = verification and (verification.power and "connected" or "missing_power_source")
       or "missing_power_source",
     fuel_status = verification and (verification.fuel and "delivered" or "missing_fuel_source")
@@ -236,7 +267,11 @@ local function finish_logistics(s, task, status, reason)
       coal_seen = observation.coal_seen == true,
       plate_seen = observation.plate_seen == true,
       recipe_ok = observation.gear_recipe_ok == true,
+      plates_by_furnace = observation.plate_produced_by or {},
+      gears_by_assembler = observation.gear_produced_by or {},
+      coal_remaining = observation.coal_remaining or 0,
     },
+    further_work_possible = status ~= "succeeded" and summary.missing_material_total == 0,
     required_items = required_items,
     ghosts_total = summary.ghosts_total,
     built_by_agent = summary.built_by_agent,
@@ -1125,11 +1160,14 @@ end
 local function start_logistics(s, p)
   local goal = p.goal_item or "iron-gear-wheel"
   assert(type(goal) == "string" and goal ~= "", "goal_item must be a non-empty string")
+  local mode = p.mode == "multi_consumer" and "multi_consumer" or "linear_chain"
   s.next_task_id = (s.next_task_id or 0) + 1
   s.task = {
     id = tostring(s.next_task_id), type = "build_logistics", status = "running",
-    phase = "planning", goal_item = goal,
-    requested_plan_id = p.plan_id, layout_plan_id = nil, logistics_plan_id = nil,
+    phase = "planning", goal_item = goal, mode = mode,
+    requested_plan_id = p.plan_id,
+    requested_logistics_plan_id = p.logistics_plan_id,
+    layout_plan_id = nil, logistics_plan_id = nil,
     entries = {}, obstacles_seen = {}, obstacles_cleared = {},
     started_tick = game.tick, last_progress_tick = game.tick,
     deadline_ticks = LOGISTICS_DEADLINE_TICKS,
@@ -1144,33 +1182,74 @@ end
 
 local function tick_logistics_planning(s, task, agent)
   if not task.layout_plan_id then
-    local request = {goal_item = task.goal_item, logistics_chain = true}
     if task.requested_plan_id then
-      request.plan_id = nil
-    end
-    local result = layout_planner.create(s, request)
-    if not result.ok then
-      finish_logistics(s, task, "blocked", "layout_unavailable:" .. tostring(result.reason))
+      local plan = s.layout_plans and s.layout_plans.by_id
+        and s.layout_plans.by_id[task.requested_plan_id]
+      if not plan then
+        finish_logistics(s, task, "blocked", "unknown_layout_plan")
+        return
+      end
+      if (task.mode == "multi_consumer") ~= (plan.logistics
+        and plan.logistics.mode == "multi_consumer") then
+        finish_logistics(s, task, "blocked", "layout_plan_mode_mismatch")
+        return
+      end
+      task.layout_plan_id = plan.id
+    else
+      local multi = task.mode == "multi_consumer"
+      local request = {goal_item = task.goal_item}
+      if multi then
+        request.multi_consumer = true
+      else
+        request.logistics_chain = true
+      end
+      local result = layout_planner.create(s, request)
+      if not result.ok then
+        finish_logistics(s, task, "blocked", "layout_unavailable:" .. tostring(result.reason))
+        return
+      end
+      task.layout_plan_id = result.plan.id
       return
     end
-    task.layout_plan_id = result.plan.id
-    return
   end
   if not task.logistics_plan_id then
-    local result = logistics.plan(s, {layout_plan_id = task.layout_plan_id})
-    if not result.ok then
-      task.last_logistics_failure = result.reason or result.status or "blocked_route"
-      if result.physical then task.logistics_plan_id = result.physical.id end
+    if task.requested_logistics_plan_id then
+      local physical = s.logistics and s.logistics.by_id
+        and s.logistics.by_id[task.requested_logistics_plan_id]
+      if not physical then
+        finish_logistics(s, task, "blocked", "unknown_logistics_plan")
+        return
+      end
+      if physical.layout_plan_id ~= task.layout_plan_id then
+        finish_logistics(s, task, "blocked", "logistics_plan_layout_mismatch")
+        return
+      end
+      task.logistics_plan_id = physical.id
+    else
+      local result = task.mode == "multi_consumer"
+        and logistics.plan_expansion(s, {layout_plan_id = task.layout_plan_id})
+        or logistics.plan(s, {layout_plan_id = task.layout_plan_id})
+      if not result.ok then
+        task.last_logistics_failure = result.reason or result.status or "blocked_route"
+        if result.physical then task.logistics_plan_id = result.physical.id end
+        finish_logistics(s, task, "blocked", task.last_logistics_failure)
+        return
+      end
+      task.logistics_plan_id = result.physical.id
+    end
+  end
+  local layout_plan = s.layout_plans and s.layout_plans.by_id
+    and s.layout_plans.by_id[task.layout_plan_id]
+  local already_applied = layout_plan and layout_plan.application
+    and (layout_plan.application.status == "applied"
+      or layout_plan.application.status == "already_applied")
+  if not already_applied then
+    local applied = layout_planner.apply(s, {plan_id = task.layout_plan_id})
+    if not applied.ok then
+      task.last_logistics_failure = applied.status or "layout_apply_failed"
       finish_logistics(s, task, "blocked", task.last_logistics_failure)
       return
     end
-    task.logistics_plan_id = result.physical.id
-  end
-  local applied = layout_planner.apply(s, {plan_id = task.layout_plan_id})
-  if not applied.ok then
-    task.last_logistics_failure = applied.status or "layout_apply_failed"
-    finish_logistics(s, task, "blocked", task.last_logistics_failure)
-    return
   end
   local placed = logistics.place_ghosts(s, {logistics_plan_id = task.logistics_plan_id})
   if not placed.ok then
@@ -1203,6 +1282,56 @@ local function tick_logistics_verification(s, task, agent)
   end
   task.last_verification = verification
   task.last_progress_tick = game.tick
+  if task.mode == "multi_consumer" then
+    if not verification.entities then
+      if game.tick - task.verify_started_tick > LOGISTICS_SETTLE_TICKS + 60 * 30 then
+        finish_logistics(s, task, "blocked", "physical_entities_missing")
+      end
+      return
+    end
+    if not verification.power then
+      finish_logistics(s, task, "blocked", "missing_power_source")
+      return
+    end
+    if not verification.routes_connected then
+      task.route_invalid_since = task.route_invalid_since or game.tick
+      task.route_invalid_attempts = (task.route_invalid_attempts or 0) + 1
+      if task.route_invalid_attempts >= 3
+        and game.tick - task.route_invalid_since > 60 * 10 then
+        local first = nil
+        for _, route in ipairs(verification.routes or {}) do
+          if not route.connected then
+            first = tostring(route.id) .. ":" .. tostring(route.reason)
+            break
+          end
+        end
+        finish_logistics(s, task, "blocked",
+          "route_not_connected:" .. tostring(first or "unknown"))
+        return
+      end
+    else
+      task.route_invalid_since = nil
+      task.route_invalid_attempts = 0
+    end
+    if not verification.fuel then
+      local depleted = (verification.observation.coal_remaining or 0) <= 0
+      finish_logistics(s, task, "blocked",
+        depleted and "missing_fuel_source:fuel_depleted"
+        or "missing_fuel_source:fuel_not_delivered")
+      return
+    end
+    if verification.ok then
+      finish_logistics(s, task, "succeeded", "multi_consumer_production_observed")
+      return
+    end
+    task.monitor_started_tick = task.monitor_started_tick or game.tick
+    if game.tick - task.monitor_started_tick > LOGISTICS_MULTI_MONITOR_TICKS then
+      local reason = verification.consumers_supplied and "production_not_observed"
+        or "consumers_not_supplied"
+      finish_logistics(s, task, "failed", reason)
+    end
+    return
+  end
   if not verification.entities then
     if game.tick - task.verify_started_tick > LOGISTICS_SETTLE_TICKS + 60 * 30 then
       finish_logistics(s, task, "blocked", "physical_entities_missing")
@@ -1335,9 +1464,15 @@ function M.status(s, task_id)
     local observation = verification.observation or {}
     return {
       task_id = task.id, type = task.type, status = task.status, phase = task.phase,
-      reason = task.pause_reason,
+      reason = task.pause_reason, mode = task.mode or "linear_chain",
       goal_item = task.goal_item, layout_plan_id = task.layout_plan_id,
       logistics_plan_id = task.logistics_plan_id,
+      routes_connected = verification.routes_connected,
+      routes = verification.routes,
+      consumers = verification.consumers,
+      consumers_supplied = verification.consumers_supplied,
+      production_active = verification.production_active,
+      output_verified = verification.output_verified,
       ghosts_total = summary.ghosts_total,
       built_by_agent = summary.built_by_agent,
       already_built = summary.already_built,

@@ -391,6 +391,26 @@ function M.build(agent, ghost)
     return false, "revive_failed"
   end
   local configuration_error = nil
+  -- Factorio 2.1.24 revives an underground ghost as an input endpoint until its partner
+  -- exists. Reassert the planned travel direction on both real endpoints after each
+  -- revival; the engine then assigns input/output roles and exposes the live pair through
+  -- underground_belt_neighbour. This is construction configuration, not transport
+  -- simulation: the endpoint still has to be paid for and revived as an ordinary ghost.
+  if ghost_name == "underground-belt" and tags and tags.ae_underground_direction then
+    local direction = tonumber(tags.ae_underground_direction)
+    if direction then
+      pcall(function() entity.direction = direction end)
+      local other_x = tonumber(tags.ae_underground_other_x)
+      local other_y = tonumber(tags.ae_underground_other_y)
+      if other_x and other_y then
+        local other = surface.find_entity("underground-belt",
+          {x = other_x + 0.5, y = other_y + 0.5})
+        if other and other.valid then
+          pcall(function() other.direction = direction end)
+        end
+      end
+    end
+  end
   if module_recipe then
     if entity.type ~= "assembling-machine" then
       configuration_error = "recipe_entity_unsupported"
