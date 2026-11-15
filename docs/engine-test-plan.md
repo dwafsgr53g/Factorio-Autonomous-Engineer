@@ -43,6 +43,21 @@ Target: Factorio 2.1.24, Windows, isolated copy of an existing save. Disable the
 - Stop/restart the MCP process while Factorio remains active; inspect the task by status and event cursor. Do not assume an exactly-once guarantee beyond the request cache retention.
 - Test unavailable RCON, wrong password and reconnect; verify clear errors and no duplicate task.
 
+## 6. Construction and collaboration
+
+Run `tests/engine/s5_construction.py` and `tests/engine/s6_construction_persistence.py` against disposable copies of the baseline save. Expected observations:
+
+- A — plan placement: named plan reports success; the expected `entity-ghost` objects exist; no real building exists; inventory is unchanged.
+- B — own materials: the agent walks to the work area; each real building appears once; the exact placeable items are removed once; the result reports built_by_agent and no ghosts remain.
+- C — ordinary chest: an unmarked wooden chest supplies the required items; the chest loses exactly those items; the agent walks to it; a full inventory leaves the chest untouched and reports inventory_full; partial supply builds what it can and reports missing_materials.
+- D — no materials: the ghost remains, no real building or new item appears, and the terminal status is missing_materials.
+- E — player blueprint: the agent detects player ghosts in its work area, leaves an already-built object alone and builds the remaining objects without duplicates.
+- F — player changes: a cancelled ghost is not recreated, a player-built object is not duplicated, and a replacement ghost is discovered and built; only the replacement's cost is paid.
+- G — clearing: a tree and a rock on target positions are mined, their ordinary resources enter the inventory and the objects are then built; nearby chests and real buildings remain intact.
+- H — persistence/interruption: save/load during clearing and after a chest transfer preserves task ID, ledger and materials exactly once; safety pre-emption returns interrupted_by_safety and waits for explicit resume; cancel stops movement and leaves the ghost; a player working at one site is deferred and a player removing chest materials is observed; death/respawn preserves construction materials and resume completes the build.
+
+Do not count a construction scenario as engine-tested unless the script prints its evidence and exits 0. Record the actual commands and results in `docs/verification-construction.md`.
+
 ## Pass criteria
 
 Do not promote the mod beyond development status until all relevant checks pass on the actual Factorio 2.1.24 executable and the user's enabled mod set. Record the save copy, mod list, Factorio build, test actions, RCON logs, event payloads and before/after inventory counts.

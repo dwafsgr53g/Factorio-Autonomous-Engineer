@@ -3,6 +3,7 @@ local safety = require("lib.safety")
 local tasks = require("lib.tasks")
 local strategy = require("lib.strategy")
 local site_selector = require("lib.site_selector")
+local construction = require("lib.construction")
 
 local function state()
   storage.autonomous_engineer = storage.autonomous_engineer or {
@@ -15,7 +16,8 @@ local operations = {}
 operations.ping = function(s)
   return {mod_version = "0.1.0-dev", factorio_version = script.active_mods.base,
     agent_state = lifecycle.status(s),
-    capabilities = {"get_briefing", "select_starting_site", "gather_resource", "safety", "respawn"}}
+    capabilities = {"get_briefing", "select_starting_site", "gather_resource",
+      "assist_construction", "safety", "respawn"}}
 end
 operations.strategy_context = function(s) return strategy.context(s) end
 operations.select_starting_site = function(s)
@@ -38,12 +40,18 @@ operations.agent_events = function(s, p)
 end
 operations.task_start = function(s, p)
   local context = strategy.context(s)
+  local task_capability = p.task == "assist_construction" and "assist_construction" or p.task
   local allowed = false
   for _, capability in pairs(context.available_capabilities) do
-    if capability == "gather_resource" then allowed = true break end
+    if capability == task_capability then allowed = true break end
   end
-  assert(allowed, "Resource gathering is not available in the current domain")
+  assert(allowed, "Requested task is not available in the current domain")
   return tasks.start(s, p)
+end
+operations.construction_plan_place = function(s, p)
+  assert(s.agent and s.agent.valid, "Agent is not alive")
+  assert(not (s.safety and s.safety.active), "Safety controller is active")
+  return construction.place_plan(s, p.plan or "test_basic")
 end
 operations.task_status = function(s, p) return tasks.status(s, p.task_id) end
 operations.task_cancel = function(s, p)
@@ -54,6 +62,8 @@ operations.task_resume = function(s, p)
   return tasks.resume(s, p.task_id)
 end
 
+-- Internal composite planner entry point used by the engine harness and by future
+-- high-level construction tasks. It accepts only a named code-owned plan, never coordinates.
 commands.add_command("ae", "Factorio Autonomous Engineer RCON bridge", function(command)
   if command.player_index then return end
   local decoded, request = pcall(helpers.json_to_table, command.parameter or "")

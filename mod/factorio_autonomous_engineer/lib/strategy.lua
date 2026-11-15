@@ -87,7 +87,10 @@ function M.context(s)
     and not (s.starting_site and s.starting_site.confirmed) then
     capabilities[#capabilities + 1] = "select_starting_site"
   end
-  if not surface.platform then capabilities[#capabilities + 1] = "gather_resource" end
+  if not surface.platform then
+    capabilities[#capabilities + 1] = "gather_resource"
+    capabilities[#capabilities + 1] = "assist_construction"
+  end
 
   return {
     planet = {name = planet_name, domain = domain, surface = surface.name},

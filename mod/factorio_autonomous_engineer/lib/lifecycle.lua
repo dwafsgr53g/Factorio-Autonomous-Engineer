@@ -300,6 +300,9 @@ function M.tick(s)
     if s.task and s.task.status == "running" then
       s.task.status, s.task.pause_reason = "paused", "death"
       s.task.phase, s.task.target, s.task.path = "search", nil, nil
+      s.task.target_kind, s.task.target_entry = nil, nil
+      s.task.target_ghost, s.task.target_obstacle, s.task.target_chest = nil, nil, nil
+      s.task.approach, s.task.path_request, s.task.path_index = nil, nil, nil
     end
     append_event(s, "agent_lost", {reason = "entity_removed_without_death_event"})
   end

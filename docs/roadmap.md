@@ -14,12 +14,14 @@ This is an early alternative implementation, not yet a feature-complete fork/rep
 - Independent enemy/damage safety controller with retreat and conditional return fire.
 - Persistent logical agent lifecycle: death, recovery bags, delayed safe respawn.
 - Bounded event queue, cursor-based event retrieval, task resume/cancel.
+- Stage-3 construction executor: ghost-only named plans, paid `revive()` builds, ordinary-chest item acquisition, natural tree/rock clearing, player-ghost collaboration, cancellation/change reconciliation, save/load and safety/resume integration.
 
 ## Next parity work
 
 - Add a general goal/plan executor and a stage/planet-aware capability registry.
-- Add high-level automation, construction, crafting, delivery, repair and refuelling workflows.
-- Port blueprint books and placement behind composite build tasks; the LLM should submit intent and constraints, not each placement coordinate.
+- Add high-level automation, crafting, delivery, repair and refuelling workflows.
+- Build the Layout Planner and blueprint-book support behind composite build tasks; the LLM should submit intent and constraints, not each placement coordinate. The current construction executor only handles a small code-owned test plan and player ghosts.
+- Add module/equipment-aware ghost requests and item-request-proxy handling, arbitrary belt/pipe layout, construction robots and logistics-network delivery after the paid-ghost foundation is extended.
 - Add planet-specific bootstrap/site planners and survival skills for Vulcanus, Fulgora, Gleba and Aquilo.
 - Add production and science-chain analysis as compact strategic state.
 - Add rail/logistics plans, then circuits and platform operations, behind high-level goals.

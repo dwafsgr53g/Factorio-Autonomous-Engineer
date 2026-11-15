@@ -49,12 +49,16 @@ scenarios never inherit each other's state.
 | `s3b_unsafe_home.py` | respawn holds at `waiting_for_safe_spawn` / `home_under_threat` while hostiles sit in the home radius, then completes once the area is clear |
 | `s4_rcon.py` | replay of the same `request_id` returns the cached response instead of a second task (deduplication is request-id scoped, not a general exactly-once guarantee), cache survives save/load, connection loss raises a bounded error carrying the request id, reconnect works, wrong password and missing server report clearly |
 | `s4b_mcp_restart.py` | SIGKILL of the MCP client mid-task: the task keeps its id, a fresh MCP process reports it, and the remaining amount completes exactly |
+| `s5_construction.py` | scenarios A–G: ghost-only plan placement, paid builds, ordinary-chest acquisition, missing materials, full inventory, player blueprints, player cancellations/builds/plan changes, tree/rock clearing and preservation of nearby player entities |
+| `s6_construction_persistence.py` | scenario H: save/load during clearing and after a chest transfer, safety pre-emption + explicit resume, cancel, player interference, player chest withdrawal and death/respawn with construction materials |
 
 Run one at a time (they share port 27075):
 
 ```
 uv run python tests/engine/s3_death.py
 ```
+
+`harness.py` also provides construction setup helpers: `place_plan`, `create_ghost`, `cancel_ghost`, `build_ghost_as_player`, `create_chest`, `chest_contents`, `remove_chest_items`, `create_natural`, `create_player_character`, `give_items`, `fill_main_inventory`, `ghosts`, `entities_named` and `wait_task`. Direct ghost revival in `build_ghost_as_player` and direct `surface.create_entity` calls in setup are harness-only scaffolding; production construction uses paid ghost revival.
 
 Each script prints its evidence and exits non-zero on failure.
 

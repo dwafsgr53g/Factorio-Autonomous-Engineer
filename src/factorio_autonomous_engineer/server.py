@@ -44,15 +44,24 @@ def create_server(bridge: Bridge) -> MCPServer:
         return json.dumps(response.get("result", response), ensure_ascii=False)
 
     @server.tool()
-    async def execute_task(task: Literal["gather_resource"], resource: str, amount: int) -> str:
+    async def execute_task(task: Literal["gather_resource", "assist_construction"],
+                           resource: str | None = None, amount: int | None = None) -> str:
         """Execute one high-level objective.
 
-        Route, approach, movement, mining and retries all happen inside the executor.
+        gather_resource needs resource and amount. assist_construction discovers pending
+        construction ghosts in the executor-owned work area. Route, approach, movement,
+        mining, item transfer, clearing and building all happen inside the executor.
         """
-        if amount <= 0:
-            raise ToolError("amount must be a positive integer")
+        if task == "gather_resource":
+            if resource is None or amount is None:
+                raise ToolError("gather_resource requires resource and amount")
+            if amount <= 0:
+                raise ToolError("amount must be a positive integer")
+            spec = {"task": task, "resource": resource, "amount": amount}
+        else:
+            spec = {"task": task}
         try:
-            result = await runner.execute({"task": task, "resource": resource, "amount": amount})
+            result = await runner.execute(spec)
         except (BridgeError, OSError, ValueError) as exc:
             raise ToolError(str(exc)) from exc
         return json.dumps(result, ensure_ascii=False)
@@ -74,7 +83,11 @@ def create_server(bridge: Bridge) -> MCPServer:
             "safety": {k: safety.get(k)
                        for k in ("active", "status", "reason", "destination_kind") if k in safety},
             "task": {k: task.get(k) for k in ("task_id", "type", "status", "phase", "resource",
-                "requested", "collected", "deposits_used", "reason") if k in task},
+                "requested", "collected", "deposits_used", "reason", "work_area_available",
+                "ghosts_total", "built_by_agent", "already_built", "remaining", "cancelled",
+                "unsupported", "blocked", "unreachable", "missing_materials",
+                "missing_material_total", "obstacles", "player_interference",
+                "inventory_full", "items_transferred") if k in task},
             "inventory": payload.get("inventory", {}),
         }
         return json.dumps(compact, ensure_ascii=False)

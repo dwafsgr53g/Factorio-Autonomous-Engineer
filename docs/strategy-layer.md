@@ -37,6 +37,7 @@ Currently implemented high-level goals:
 
 - select_starting_site on Nauvis during bootstrap. The model supplies no coordinates.
 - gather_resource on a planet surface. The model supplies a resource and requested amount only.
+- assist_construction on a planet surface. The model supplies only the high-level goal; the executor owns work-area selection, ghost discovery, material acquisition, clearing, movement and placement.
 
 The site selector works only with generated chunks around the starting area. It finds candidate centers with a furnace-sized free footprint, evaluates iron/copper/coal/stone proximity, water access, known hostile units/spawners/turrets and generated-chunk coverage, then registers the best candidate as the agent's home. It does not claim unexplored territory is enemy-free. The selector is Nauvis-only; other planets require their own site-scoring strategy and skill rules.
 

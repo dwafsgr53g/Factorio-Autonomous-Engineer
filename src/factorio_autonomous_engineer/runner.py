@@ -9,7 +9,7 @@ from typing import Any
 from .bridge import Bridge, BridgeError
 
 TERMINAL_STATES = {
-    "succeeded", "failed", "cancelled",
+    "succeeded", "failed", "cancelled", "partial", "missing_materials", "blocked",
     "interrupted_by_safety", "interrupted_by_death",
 }
 

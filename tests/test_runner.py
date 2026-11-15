@@ -58,6 +58,33 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["reason"], "no_deposits")
 
 
+class RunnerTerminalStatusTests(unittest.IsolatedAsyncioTestCase):
+    async def test_partial_construction_is_terminal(self):
+        bridge = FakeBridge([{"status": "partial", "success": False,
+                              "built_by_agent": 1, "remaining": 1,
+                              "reason": "missing_materials"}])
+        runner = TaskRunner(bridge, sleep=lambda _: asyncio.sleep(0))
+        result = await runner.execute({"task": "assist_construction"})
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["remaining"], 1)
+
+    async def test_missing_materials_is_terminal(self):
+        bridge = FakeBridge([{"status": "missing_materials", "success": False,
+                              "missing_materials": {"stone-furnace": 1}}])
+        runner = TaskRunner(bridge, sleep=lambda _: asyncio.sleep(0))
+        result = await runner.execute({"task": "assist_construction"})
+        self.assertEqual(result["status"], "missing_materials")
+        self.assertEqual(result["missing_materials"], {"stone-furnace": 1})
+
+    async def test_blocked_construction_is_terminal(self):
+        bridge = FakeBridge([{"status": "blocked", "success": False,
+                              "reason": "inventory_full"}])
+        runner = TaskRunner(bridge, sleep=lambda _: asyncio.sleep(0))
+        result = await runner.execute({"task": "assist_construction"})
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "inventory_full")
+
+
 class RunnerConstructionTests(unittest.TestCase):
     def test_runner_can_be_constructed_without_running_event_loop(self):
         runner = TaskRunner(FakeBridge([]))

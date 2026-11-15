@@ -153,6 +153,11 @@ local function enter_emergency(s, agent, reason, enemy, event)
   if s.task and s.task.status == "running" then
     s.task.status, s.task.pause_reason = "paused", "safety"
     s.task.phase, s.task.path, s.task.path_request, s.task.target = "search", nil, nil, nil
+    -- Construction tasks keep their plan/reconciliation ledger but must drop the
+    -- in-flight low-level target. The executor re-scans only after an explicit resume.
+    s.task.target_kind, s.task.target_entry = nil, nil
+    s.task.target_ghost, s.task.target_obstacle, s.task.target_chest = nil, nil, nil
+    s.task.approach, s.task.path_index, s.task.missing_for_target = nil, nil, nil
   end
   stop_ordinary_actions(agent)
   append_event(s, "agent_under_attack", {

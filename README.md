@@ -18,19 +18,21 @@ The intended split is:
 - Stage and planet skill loading from plain Markdown.
 - Nauvis-only bootstrap-site scoring using iron/copper/coal/stone access, water, a free furnace-sized footprint, nearby known hostiles and generated-chunk coverage. The selected location becomes the home/respawn point.
 - High-level resource gathering. The executor searches for a deposit, chooses an approach point, pathfinds, moves, mines, retries and verifies the actual inventory delta.
+- High-level construction assistance. The executor discovers ghosts in a code-owned work area, walks, clears natural obstacles, fetches only needed items from ordinary chests, pays the exact build cost, revives the ghost, verifies the real entity and reconciles player builds/cancellations/changes.
 - Independent safety controller: damage/hostile detection, task pre-emption, evacuation, and conditional return fire.
 - Persistent character lifecycle: death detection, recovery inventories, delayed safe respawn and event reporting.
 - The planner sees only high-level outcomes and compact status/events. No coordinates are returned by the model-facing tools.
 
-**Important scope boundary:** selecting a starting site is implemented; constructing a complete starter base is not yet implemented. The selector chooses and registers a home location, but it does not teleport the character there or build a factory. The only current foreground gameplay task is `gather_resource`. Other stage/planet skill files are planning guidance, not claims that every stage's tools are implemented.
+**Important scope boundary:** selecting a starting site and assisting with bounded construction ghosts are implemented; a complete starter base, Layout Planner, arbitrary belt networks, construction robots and logistics-network construction are not. The selector chooses and registers a home location. The construction executor supports base-placeable items by name and quality but refuses modules, equipment and other extra item requests in this stage. Other stage/planet skill files are planning guidance, not claims that every stage's tools are implemented.
 
-The Factorio Lua implementation has **not** yet been validated in a real Factorio 2.1.24 engine run. See [the engine test plan](docs/engine-test-plan.md).
+The construction cycle has been validated in a real Factorio 2.1.24 engine run. See [the construction verification report](docs/verification-construction.md) and [the engine test plan](docs/engine-test-plan.md).
 
 ## MCP tools currently exposed
 
 - `get_briefing`: detect planet/stage, return capability allow-list and matching skill text.
 - `select_starting_site`: code-side Nauvis bootstrap site selection; the model supplies no coordinates.
 - `execute_task(task="gather_resource", resource=..., amount=...)`: one high-level gathering goal; internal action polling is hidden.
+- `execute_task(task="assist_construction")`: one high-level construction-assistance goal. The model supplies no coordinates or per-building actions; the result distinguishes success, partial completion, missing materials, blocked work, cancellation and safety interruption.
 - `get_agent_status`: compact lifecycle, safety, task and inventory summary.
 - `get_pending_events`: compact event queue with cursor.
 - `cancel_task` / `resume_task`: task lifecycle controls.
@@ -56,11 +58,11 @@ The Factorio Lua implementation has **not** yet been validated in a real Factori
 ```powershell
 uv sync
 uv run ruff check .
-uv run python -m unittest discover -s tests -v
+uv run pytest -q tests
 uv run python scripts/package_mod.py
 ```
 
-Python unit tests cover the private task polling contract and skill loading. They are not a substitute for loading the mod in Factorio. Automated engine scenarios (save/load, safety pre-emption, death recovery, RCON faults) live in [tests/engine](tests/engine/README.md) and drive a disposable headless server. Follow [the engine test plan](docs/engine-test-plan.md) on a disposable save before real gameplay use.
+Python unit tests cover the private task polling contract and skill loading. They are not a substitute for loading the mod in Factorio. Automated engine scenarios (save/load, safety pre-emption, death recovery, RCON faults, construction and collaboration) live in [tests/engine](tests/engine/README.md) and drive a disposable headless server. Follow [the engine test plan](docs/engine-test-plan.md) on a disposable save before real gameplay use.
 
 ## Architecture and contribution rules
 
