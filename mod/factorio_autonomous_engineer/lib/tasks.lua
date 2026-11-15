@@ -79,6 +79,9 @@ local function clear_target(task)
   task.target_ghost, task.target_obstacle, task.target_chest = nil, nil, nil
   task.missing_for_target = nil
   task.approach, task.path, task.path_index, task.path_request = nil, nil, nil, nil
+  task.belt_walk_until, task.belt_walk_direction = nil, nil
+  task.escape_until, task.escape_direction = nil, nil
+  task.escape_kind, task.escape_attempts = nil, nil
   task.phase, task.phase_started_tick = "search", game.tick
 end
 
@@ -250,6 +253,10 @@ local function finish_logistics(s, task, status, reason)
     player_interference = summary.player_interference,
     inventory_full = summary.inventory_full,
     items_transferred = summary.items_transferred,
+    acquisition_trips = task.acquisition_trips or 0,
+    step_out_count = task.step_out_count or 0,
+    step_out_teleports = task.step_out_teleports or 0,
+    belt_step_offs = task.belt_step_offs or 0,
   }
 end
 
@@ -322,6 +329,9 @@ local function finish_construction(s, task, status, reason)
     player_interference = summary.player_interference,
     inventory_full = summary.inventory_full,
     items_transferred = summary.items_transferred,
+    step_out_count = task.step_out_count or 0,
+    step_out_teleports = task.step_out_teleports or 0,
+    belt_step_offs = task.belt_step_offs or 0,
   }
 end
 
@@ -337,11 +347,14 @@ local function pending_entries(task, agent)
     end
   end
   if task.type == "build_logistics" then
-    -- Build the far end of a physical chain first. A nearest-first pass builds belts and
-    -- inserters around the character and can enclose the remaining targets in a pocket
-    -- with no valid short path. Far-to-near reverses that failure mode while keeping the
-    -- same paid executor and the same deterministic tie-break.
+    -- Build the large module ghosts first, while the area is still open. Building belts
+    -- and inserters around the character first can enclose a later 2x2/3x3 module ghost
+    -- and leave no approach. After the modules, build the far end of the logistics chain
+    -- first so the remaining 1x1 ghosts cannot form a pocket around the character.
     table.sort(result, function(a, b)
+      local a_module = a.ghost and a.ghost.tags and a.ghost.tags.ae_plan_id ~= nil
+      local b_module = b.ghost and b.ghost.tags and b.ghost.tags.ae_plan_id ~= nil
+      if a_module ~= b_module then return a_module end
       local da = distance(agent.position, a.position)
       local db = distance(agent.position, b.position)
       if math.abs(da - db) > 1e-9 then return da > db end
@@ -353,6 +366,40 @@ local function pending_entries(task, agent)
     end)
   end
   return result
+end
+
+-- Aggregate the exact cost of every ghost that is still expected to be built. This is
+-- used by the composite logistics task to fetch the whole material shortfall in one chest
+-- trip. Payment and revival remain per ghost in the existing paid executor.
+local function aggregate_pending_requirements(task)
+  local map, list = {}, {}
+  for _, entry in pairs(task.entries or {}) do
+    local buildable = entry.status == "pending" or entry.status == "building"
+      or entry.status == "acquiring" or entry.status == "clearing"
+    if buildable and entry.ghost and entry.ghost.valid then
+      local requirements = construction.requirements(entry.ghost)
+      if requirements then
+        for _, requirement in ipairs(requirements) do
+          local quality = requirement.quality or "normal"
+          local key = requirement.name .. ":" .. quality
+          local existing = map[key]
+          if existing then
+            existing.count = existing.count + requirement.count
+          else
+            local record = {name = requirement.name, count = requirement.count,
+              quality = quality}
+            map[key] = record
+            list[#list + 1] = record
+          end
+        end
+      end
+    end
+  end
+  table.sort(list, function(a, b)
+    if a.name ~= b.name then return a.name < b.name end
+    return a.quality < b.quality
+  end)
+  return list
 end
 
 local function set_entry_status(task, key, status, reason, missing)
@@ -392,7 +439,111 @@ local function position_inside_box(position, box, margin)
     and position.y > box.left_top.y - margin and position.y < box.right_bottom.y + margin
 end
 
+local function position_inside_ghost_box(position, ghost, margin)
+  if not ghost or not ghost.valid then return false end
+  local box = ghost.bounding_box
+  margin = margin or 0.2
+  return position.x > box.left_top.x - margin and position.x < box.right_bottom.x + margin
+    and position.y > box.left_top.y - margin and position.y < box.right_bottom.y + margin
+end
+
+local function position_inside_pending_ghost(task, position)
+  for _, entry in pairs(task.entries or {}) do
+    local ghost = entry.ghost
+    if ghost and ghost.valid and entry.status ~= "built"
+      and entry.status ~= "already_built" and entry.status ~= "cancelled"
+      and entry.status ~= "unsupported" then
+      if position_inside_ghost_box(position, ghost, 0.4) then return true end
+    end
+  end
+  return false
+end
+
+local function inside_pending_ghost(task, agent)
+  return position_inside_pending_ghost(task, agent.position)
+end
+
+local WALK_VECTORS = {
+  {x = 0, y = -1, direction = 0}, {x = 1, y = -1, direction = 2},
+  {x = 1, y = 0, direction = 4}, {x = 1, y = 1, direction = 6},
+  {x = 0, y = 1, direction = 8}, {x = -1, y = 1, direction = 10},
+  {x = -1, y = 0, direction = 12}, {x = -1, y = -1, direction = 14},
+}
+
+-- Choose the best immediate 8-way walking direction toward a safe goal. The first step
+-- must be free of real colliders and belts, and must not enter another pending ghost.
+local function best_walk_direction(surface, task, agent, goal)
+  local best, best_score = nil, nil
+  for _, vector in ipairs(WALK_VECTORS) do
+    local step = {
+      x = agent.position.x + vector.x * 0.8,
+      y = agent.position.y + vector.y * 0.8,
+    }
+    if surface.can_place_entity{
+      name = "character", position = step, force = agent.force}
+      and not construction.on_belt(surface, step) then
+      -- The first step may still be inside the same large ghost; that is fine because
+      -- ghosts do not collide. Only real colliders and belts are explicit rejections.
+      local score = distance(step, goal)
+      if not best_score or score < best_score then
+        best, best_score = vector.direction, score
+      end
+    end
+  end
+  return best
+end
+
+-- Find a walkable position outside every still-pending ghost footprint. The position
+-- search is bounded and deterministic; it is used only to unstick the character, not
+-- for normal target approach.
+local function find_step_out_position(surface, task, agent)
+  local boxes = {}
+  for _, entry in pairs(task.entries or {}) do
+    local ghost = entry.ghost
+    if ghost and ghost.valid and entry.status ~= "built"
+      and entry.status ~= "already_built" and entry.status ~= "cancelled"
+      and entry.status ~= "unsupported" then
+      boxes[#boxes + 1] = ghost.bounding_box
+    end
+  end
+  local candidates = {}
+  for radius = 1.0, 16.0, 0.5 do
+    for index = 0, 23 do
+      local angle = index * (2 * math.pi / 24)
+      local candidate = {
+        x = agent.position.x + math.cos(angle) * radius,
+        y = agent.position.y + math.sin(angle) * radius,
+      }
+      local inside = false
+      for _, box in ipairs(boxes) do
+        if candidate.x > box.left_top.x - 1.0
+          and candidate.x < box.right_bottom.x + 1.0
+          and candidate.y > box.left_top.y - 1.0
+          and candidate.y < box.right_bottom.y + 1.0 then
+          inside = true
+          break
+        end
+      end
+      if not inside and surface.can_place_entity{
+        name = "character", position = candidate, force = agent.force}
+        and not construction.on_belt(surface, candidate) then
+        candidates[#candidates + 1] = candidate
+      end
+    end
+    if #candidates > 0 then break end
+  end
+  table.sort(candidates, function(a, b)
+    local da, db = distance(agent.position, a), distance(agent.position, b)
+    if math.abs(da - db) > 0.25 then return da < db end
+    if a.x ~= b.x then return a.x < b.x end
+    return a.y < b.y
+  end)
+  return candidates[1]
+end
+
+
 local function target_position(task)
+  if task.target_kind == "step_out" then return task.approach end
   if task.target_kind == "ghost" then
     return task.target_ghost and task.target_ghost.valid and task.target_ghost.position or nil
   elseif task.target_kind == "obstacle" then
@@ -404,6 +555,7 @@ local function target_position(task)
 end
 
 local function target_valid(task)
+  if task.target_kind == "step_out" then return task.approach ~= nil end
   if task.target_kind == "ghost" then return task.target_ghost and task.target_ghost.valid end
   if task.target_kind == "obstacle" then return task.target_obstacle and task.target_obstacle.valid end
   if task.target_kind == "chest" then return task.target_chest and task.target_chest.valid end
@@ -513,18 +665,24 @@ local function choose_target(s, task, agent)
             else
               local missing = construction.missing(agent, requirements)
               if #missing > 0 then
-                if not construction.can_carry_any(agent, missing) then
+                local acquisition_missing = missing
+                if task.type == "build_logistics" then
+                  local batch = aggregate_pending_requirements(task)
+                  local batch_missing = construction.missing(agent, batch)
+                  if #batch_missing > 0 then acquisition_missing = batch_missing end
+                end
+                if not construction.can_carry_any(agent, acquisition_missing) then
                   task.inventory_full = true
                   set_entry_status(task, entry.key, "blocked", "inventory_full")
                 else
                   local chest = construction.chest_with_items(
-                    context.surface, context.area, missing, agent)
+                    context.surface, context.area, acquisition_missing, agent)
                   if chest then
                     local approach = construction.approach_for_entity(context.surface, chest, agent)
                     if approach then
                       entry.status = "acquiring"
                       task.target_entry, task.target_ghost, task.target_chest = entry.key, ghost, chest
-                      task.missing_for_target = missing
+                      task.missing_for_target = acquisition_missing
                       if begin_path(task, agent, approach, "chest") then return true end
                       set_entry_status(task, entry.key, "blocked", "chest_path_failed")
                       clear_target(task)
@@ -532,7 +690,8 @@ local function choose_target(s, task, agent)
                       set_entry_status(task, entry.key, "blocked", "chest_no_approach")
                     end
                   else
-                    set_entry_status(task, entry.key, "missing_materials", "missing_materials", missing)
+                    set_entry_status(task, entry.key, "missing_materials", "missing_materials",
+                      missing)
                   end
                 end
               else
@@ -732,19 +891,30 @@ local function try_take_from_chest(s, task, agent)
     clear_target(task)
     return
   end
-  local missing = construction.missing(agent, requirements)
+  local missing
+  if task.type == "build_logistics" and task.missing_for_target then
+    missing = task.missing_for_target
+  else
+    missing = construction.missing(agent, requirements)
+  end
   if #missing == 0 then
     entry.status = "pending"
     clear_target(task)
     return
   end
   local transferred, transfer_reason = construction.take_from_chest(agent, chest, missing)
+  local moved = 0
   for _, item in pairs(transferred) do
     task.items_transferred = (task.items_transferred or 0) + item.count
+    moved = moved + item.count
+  end
+  if moved > 0 then
+    task.acquisition_trips = (task.acquisition_trips or 0) + 1
   end
   if transfer_reason == "inventory_full" or transfer_reason == "item_transfer_incomplete" then
     task.inventory_full = true
-    set_entry_status(task, task.target_entry, "blocked", transfer_reason, missing)
+    set_entry_status(task, task.target_entry, "blocked", transfer_reason,
+      construction.missing(agent, requirements))
   elseif transfer_reason == "chest_unavailable" or transfer_reason == "inventory_unavailable" then
     entry.status = "pending"
   elseif transfer_reason == "chest_changed_during_transfer" then
@@ -762,6 +932,64 @@ local function tick_construction(s, task, agent)
     local summary = current_summary(task)
     finish_construction(s, task, summary.built_by_agent > 0 and "partial" or "failed",
       "task_deadline_exceeded")
+    return
+  end
+  local on_belt = construction.on_belt(agent.surface, agent.position)
+  local inside_ghost = inside_pending_ghost(task, agent)
+  -- Native walking out of a ghost or off a working belt. Ghosts do not collide with the
+  -- character and direct walking is more reliable than a path request from a moving or
+  -- embedded start. A successful walk is counted; if the route is genuinely blocked,
+  -- a bounded teleport fallback is used after several attempts.
+  if task.escape_until then
+    if not on_belt and not inside_ghost then
+      stop_character(agent)
+      if task.escape_kind == "belt" then
+        task.belt_step_offs = (task.belt_step_offs or 0) + 1
+      else
+        task.step_out_count = (task.step_out_count or 0) + 1
+      end
+      task.escape_until, task.escape_direction = nil, nil
+      task.escape_kind, task.escape_attempts = nil, nil
+      reset_inflight_entries(task)
+      task.scan_dirty = true
+      return
+    elseif game.tick < task.escape_until then
+      agent.walking_state = {walking = true, direction = task.escape_direction}
+      return
+    else
+      task.escape_until, task.escape_direction = nil, nil
+      task.escape_attempts = (task.escape_attempts or 0) + 1
+    end
+  end
+  if task.phase == "search" and (on_belt or inside_ghost) then
+    local goal = find_step_out_position(agent.surface, task, agent)
+    if goal then
+      if (task.escape_attempts or 0) > 3 then
+        agent.teleport(goal)
+        task.step_out_teleports = (task.step_out_teleports or 0) + 1
+        task.escape_attempts = 0
+        if on_belt then
+          task.belt_step_offs = (task.belt_step_offs or 0) + 1
+        else
+          task.step_out_count = (task.step_out_count or 0) + 1
+        end
+        reset_inflight_entries(task)
+        clear_target(task)
+        task.scan_dirty = true
+        return
+      end
+      local direction = best_walk_direction(agent.surface, task, agent, goal)
+      if direction then
+        task.escape_direction = direction
+        task.escape_until = game.tick + 90
+        task.escape_kind = on_belt and "belt" or "ghost"
+        task.escape_attempts = (task.escape_attempts or 0) + 1
+        agent.walking_state = {walking = true, direction = direction}
+        return
+      end
+      task.escape_attempts = (task.escape_attempts or 0) + 1
+      return
+    end
     return
   end
   if task.phase == "search" then
@@ -807,12 +1035,47 @@ local function tick_construction(s, task, agent)
     local arrival_tolerance = task.type == "build_logistics" and 0.55 or 1.5
     if arrived or distance(agent.position, task.approach) <= arrival_tolerance then
       stop_character(agent)
+      if construction.on_belt(agent.surface, agent.position) then
+        task.phase, task.phase_started_tick = "search", game.tick
+        return
+      end
       if task.target_kind == "ghost" then
         try_build_target(s, task, agent)
       elseif task.target_kind == "obstacle" then
         try_clear_target(s, task, agent)
       elseif task.target_kind == "chest" then
         try_take_from_chest(s, task, agent)
+      elseif task.target_kind == "step_out" then
+        if inside_pending_ghost(task, agent)
+          or construction.on_belt(agent.surface, agent.position) then
+          task.step_out_attempts = (task.step_out_attempts or 0) + 1
+          local safe = find_step_out_position(agent.surface, task, agent)
+          if safe then
+            if task.step_out_attempts > 4 then
+              agent.teleport(safe)
+              task.step_out_teleports = (task.step_out_teleports or 0) + 1
+              task.step_out_attempts = 0
+              task.step_out_count = (task.step_out_count or 0) + 1
+              reset_inflight_entries(task)
+              clear_target(task)
+              task.scan_dirty = true
+              return
+            end
+            task.step_out_reason = construction.on_belt(
+              agent.surface, agent.position) and "belt" or "ghost"
+            if begin_path(task, agent, safe, "step_out") then return end
+          end
+          return
+        end
+        task.step_out_count = (task.step_out_count or 0) + 1
+        if task.step_out_reason == "belt" then
+          task.belt_step_offs = (task.belt_step_offs or 0) + 1
+        end
+        task.step_out_attempts = 0
+        task.step_out_reason = nil
+        reset_inflight_entries(task)
+        clear_target(task)
+        task.scan_dirty = true
       else
         clear_target(task)
       end
@@ -847,6 +1110,8 @@ local function start_construction(s, p)
     started_tick = game.tick, last_progress_tick = game.tick,
     deadline_ticks = CONSTRUCTION_BASE_TICKS + 4 * CONSTRUCTION_TICKS_PER_GHOST,
     built_by_agent = 0, already_built = 0, cancelled = 0, items_transferred = 0,
+    acquisition_trips = 0, step_out_count = 0, step_out_teleports = 0,
+    belt_step_offs = 0,
     work_area = {available = true, radius = collaboration.work_radius(),
       center = agent.position},
   }
@@ -868,7 +1133,8 @@ local function start_logistics(s, p)
     entries = {}, obstacles_seen = {}, obstacles_cleared = {},
     started_tick = game.tick, last_progress_tick = game.tick,
     deadline_ticks = LOGISTICS_DEADLINE_TICKS,
-    construction_retries = 0, items_transferred = 0,
+    construction_retries = 0, items_transferred = 0, acquisition_trips = 0,
+    step_out_count = 0, step_out_teleports = 0, belt_step_offs = 0,
     work_area = {available = true, radius = collaboration.work_radius(),
       center = s.agent.position},
   }
@@ -1087,6 +1353,10 @@ function M.status(s, task_id)
       player_interference = summary.player_interference,
       inventory_full = summary.inventory_full,
       items_transferred = summary.items_transferred,
+      acquisition_trips = task.acquisition_trips or 0,
+      step_out_count = task.step_out_count or 0,
+      step_out_teleports = task.step_out_teleports or 0,
+      belt_step_offs = task.belt_step_offs or 0,
       logistics_status = logistics.status(s, task.logistics_plan_id or "").physical
         and logistics.status(s, task.logistics_plan_id or "").physical.status or nil,
       power_status = verification.power and "connected" or nil,
@@ -1120,6 +1390,9 @@ function M.status(s, task_id)
       player_interference = summary.player_interference,
       inventory_full = summary.inventory_full,
       items_transferred = summary.items_transferred,
+      step_out_count = task.step_out_count or 0,
+      step_out_teleports = task.step_out_teleports or 0,
+      belt_step_offs = task.belt_step_offs or 0,
       emergency = emergency,
     }
   end

@@ -25,6 +25,19 @@ local TEST_PLANS = {
   },
 }
 
+function M.on_belt(surface, position)
+  if not surface or not position then return false end
+  local entities = surface.find_entities_filtered{
+    area = {{x = position.x - 0.35, y = position.y - 0.35},
+      {x = position.x + 0.35, y = position.y + 0.35}},
+    type = {"transport-belt", "underground-belt", "splitter"},
+  }
+  for _, entity in pairs(entities) do
+    if entity.valid then return true end
+  end
+  return false
+end
+
 local function distance(a, b)
   local dx, dy = a.x - b.x, a.y - b.y
   return math.sqrt(dx * dx + dy * dy)
@@ -301,7 +314,7 @@ function M.approach(surface, position, padding, agent)
       }
       if surface.can_place_entity{
         name = "character", position = candidate, force = agent.force,
-      } then
+      } and not M.on_belt(surface, candidate) then
         candidates[#candidates + 1] = candidate
       end
     end
@@ -337,7 +350,8 @@ function M.approach_for_entity(surface, entity, agent)
         and candidate.y > box.left_top.y - 0.25
         and candidate.y < box.right_bottom.y + 0.25
       if not inside and surface.can_place_entity{
-        name = "character", position = candidate, force = agent.force} then
+        name = "character", position = candidate, force = agent.force}
+        and not M.on_belt(surface, candidate) then
         candidates[#candidates + 1] = candidate
       end
     end
