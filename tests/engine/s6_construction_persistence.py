@@ -33,10 +33,15 @@ def fresh(save: str) -> h.Bridge:
 
 
 def save_reload(b: h.Bridge, name: str) -> h.Bridge:
+    # Freeze the tick so the state observed by the preceding wait() cannot advance
+    # between the assertion, the save and the hard stop.
+    h.lua("game.tick_paused = true", b)
     print("  save:", repr(h.save_as(name, b)))
     h.stop_server()
     h.start_server(name + ".zip")
-    return h.bridge()
+    b = h.bridge()
+    h.lua("game.tick_paused = false", b)
+    return b
 
 
 def scenario_h1() -> None:
