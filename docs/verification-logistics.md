@@ -1,8 +1,7 @@
 # Stage 6 verification — physical logistics
 
-Status: **IMPLEMENTED**, **UNIT TESTED**, **AUTOMATED ENGINE TESTED** on Factorio 2.1.24.
-**HUMAN MULTIPLAYER TESTED** is pending the real-player acceptance gate; this report does not
-claim it.
+Status: **IMPLEMENTED**, **UNIT TESTED**, **AUTOMATED ENGINE TESTED**,
+**HUMAN MULTIPLAYER TESTED** on Factorio 2.1.24.
 
 ## Environment
 
@@ -161,6 +160,31 @@ Additional evidence:
 - a player building placed on a not-yet-built route tile prevents success and remains intact;
 - a real player character inside the bounded scan rectangle but outside the chain no longer
   blocks the whole plan; the chain is built and the player is preserved (`s12` scenario I).
+
+## Human multiplayer acceptance
+
+The persistent Stage-6 human server was started from a separate disposable save and profile on
+game port `27038` (RCON on a separate loopback port, credentials not published). The Stage-5
+server and its world remained running and untouched.
+
+Verified in the live shared world:
+
+- a real Factorio client joined as player `emerge.f`; the server reports `connected = true`,
+  character unit `10`;
+- the agent is a separate character entity, unit `1`;
+- the client mod set matched the server (`ae_probe` diagnostic mod disabled; no synthetic player
+  was used);
+- the model-facing `build_logistics` task (task id 2) returned `succeeded` with
+  `production_observed`: 21 objects built, 21 construction items transferred from an ordinary
+  chest, both item connections `connected`, power `connected`, fuel `delivered`, gear wheel
+  production observed;
+- the real player manually withdrew iron gear wheels from the agent-built output chest; the
+  player inventory then held 9 gear wheels;
+- the output chest refilled through the engine from 2 to 4 gear wheels in 12 seconds, and
+  `logistics_verify` remained `operational` with entities, power, fuel and production all true.
+
+The server was not restarted or reloaded after the production acceptance. The separate Stage-5
+server remained available for inspection.
 
 ## Archive verification
 
