@@ -20,15 +20,17 @@ The intended split is:
 - High-level resource gathering. The executor searches for a deposit, chooses an approach point, pathfinds, moves, mines, retries and verifies the actual inventory delta.
 - High-level construction assistance. The executor discovers ghosts in a code-owned work area, walks, clears natural obstacles, fetches only needed items from ordinary chests, pays the exact build cost, revives the ghost, verifies the real entity and reconciles player builds/cancellations/changes.
 - Stage-4 declarative module library: versioned pure-data module definitions, a strict validating catalog, deterministic parameter/orientation geometry, ghost-only internal instantiation, save-persistent instance identity and a three-module Nauvis starter library. Module operations are internal/code-owned and are not MCP tools.
+- Stage-5 deterministic Layout Planner: production dependency resolution from module ports and live recipes, bounded site search inside the work area, collision/player/ghost avoidance, documented scoring and tie-breaking, persistent plan/environment fingerprints, stale-plan rejection and idempotent ghost-only application. The first demonstration plans the iron ore → iron plate → iron gear chain and honestly reports its missing coal and electric infrastructure.
 - Independent safety controller: damage/hostile detection, task pre-emption, evacuation, and conditional return fire.
 - Persistent character lifecycle: death detection, recovery inventories, delayed safe respawn and event reporting.
 - The planner sees only high-level outcomes and compact status/events. No coordinates are returned by the model-facing tools.
 
-**Important scope boundary:** selecting a starting site, assisting with bounded construction ghosts and describing/instantiating a small Nauvis module library are implemented; a complete starter base, Layout Planner, arbitrary belt networks, construction robots and logistics-network construction are not. The selector chooses and registers a home location. The construction executor supports base-placeable items by name and quality but refuses module/equipment item requests and insert plans in this stage. Module ghosts are built by that same paid executor; module instantiation itself spends nothing. Other stage/planet skill files are planning guidance, not claims that every stage's tools are implemented.
+**Important scope boundary:** selecting a starting site, assisting with bounded construction ghosts, instantiating a small Nauvis module library and planning a minimal module layout are implemented. A complete starter base, inter-module belt/pipe/rail/circuit/wire routing, inserter placement, fuel insertion, power generation, throughput optimization, construction robots and logistics-network construction are not. The selector chooses and registers a home location. The construction executor supports base-placeable items by name and quality but refuses module/equipment item requests and insert plans in this stage. Module and layout ghosts are built by that same paid executor; planning and ghost instantiation spend nothing. A layout plan is not an operational factory. Other stage/planet skill files are planning guidance, not claims that every stage's tools are implemented.
 
 The module schema, catalog and starter library are documented in
 [module-format.md](docs/module-format.md) and [module-library.md](docs/module-library.md). The Stage-4
-engine report is [verification-modules.md](docs/verification-modules.md).
+engine report is [verification-modules.md](docs/verification-modules.md). The Stage-5 planner is
+documented in [layout-planner.md](docs/layout-planner.md).
 
 The construction cycle has been validated in a real Factorio 2.1.24 engine run. See [the construction verification report](docs/verification-construction.md) and [the engine test plan](docs/engine-test-plan.md).
 
@@ -38,6 +40,8 @@ The construction cycle has been validated in a real Factorio 2.1.24 engine run. 
 - `select_starting_site`: code-side Nauvis bootstrap site selection; the model supplies no coordinates.
 - `execute_task(task="gather_resource", resource=..., amount=...)`: one high-level gathering goal; internal action polling is hidden.
 - `execute_task(task="assist_construction")`: one high-level construction-assistance goal. The model supplies no coordinates or per-building actions; the result distinguishes success, partial completion, missing materials, blocked work, cancellation and safety interruption.
+- `plan_layout(goal_item=...)`: plan a deterministic minimal module layout for a production goal. No entity is created. The summary reports plan validity, selected modules, unresolved fuel/power dependencies, clearing needs and whether the plan can be materialized.
+- `apply_layout(plan_id=...)`: revalidate a persisted plan and create only validated module ghosts. Paid construction remains `assist_construction`. Stale plans are refused, and repeated apply is idempotent.
 - `get_agent_status`: compact lifecycle, safety, task and inventory summary.
 - `get_pending_events`: compact event queue with cursor.
 - `cancel_task` / `resume_task`: task lifecycle controls.
@@ -67,7 +71,7 @@ uv run pytest -q tests
 uv run python scripts/package_mod.py
 ```
 
-Python unit tests cover the private task polling contract, skill loading and the declarative module reader/schema/geometry reference. They are not a substitute for loading the mod in Factorio. Automated engine scenarios (save/load, safety pre-emption, death recovery, RCON faults, construction/collaboration and module catalog/instantiation) live in [tests/engine](tests/engine/README.md) and drive a disposable headless server. Follow [the engine test plan](docs/engine-test-plan.md) on a disposable save before real gameplay use.
+Python unit tests cover the private task polling contract, skill loading and the declarative module reader/schema/geometry reference. They are not a substitute for loading the mod in Factorio. Automated engine scenarios (save/load, safety pre-emption, death recovery, RCON faults, construction/collaboration, module catalog/instantiation and layout planning) live in [tests/engine](tests/engine/README.md) and drive a disposable headless server. Follow [the engine test plan](docs/engine-test-plan.md) on a disposable save before real gameplay use.
 
 ## Architecture and contribution rules
 

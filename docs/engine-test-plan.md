@@ -87,6 +87,46 @@ The Stage-3 scenarios `s5_construction.py`, `s6_construction_persistence.py` and
 reliability scenarios must be re-run on the same archive. Record results in
 `docs/verification-modules.md` and `docs/verification-construction.md`.
 
+## 8. Layout Planner
+
+Run `tests/engine/s8_layout_planner.py` against disposable copies of the baseline save. The script
+uses internal RCON planning operations; the model-facing MCP tools return only compact summaries.
+
+Expected observations:
+
+- A — dependency graph and plan creation: the live recipe chain selects the iron mining, stone
+  furnace smelting and gear assembling modules; the mining footprint contains iron ore; the furnace
+  recipe is inferred from live data; gear comes from the entity recipe; coal fuel and electric
+  network are explicit missing dependencies; two item edges are `route_required`; no ghost or real
+  module exists; inventory is unchanged; identical world state reproduces the same plan ID,
+  fingerprint and anchors; the MCP `plan_layout` response contains no coordinates, ports, entities
+  or unit numbers.
+- B — all four supported mining rotations produce materializable plans with the correct rotated
+  footprint and transformed output port direction; the four plans have distinct deterministic
+  identities.
+- C — an existing real building, an existing player construction ghost and a real player character
+  are avoided; the building/ghost remain unchanged; natural trees are recorded as clearing
+  requirements; a clearing-required plan still materializes only ghosts.
+- D — apply creates exactly one ghost per selected module and no real entity; all ghosts carry the
+  plan ID; inventory is unchanged; repeated apply is idempotent; plan and ghost identities survive
+  save/load; a cancelled plan ghost is not recreated; a player-built plan entity is recognised and
+  not duplicated; the Stage-3 named ghost plan still works.
+- E — a new real building, player construction ghost, player character or resource removal makes the
+  stored plan stale; apply refuses it and creates no ghost; the conflicting world object remains.
+
+Expected archive and regression checks:
+
+- Existing scenarios `s1_save_load`, `s2_attack`, `s3_death`, `s3b_unsafe_home`, `s4_rcon`,
+  `s4b_mcp_restart`, `s5_construction`, `s6_construction_persistence` and `s7_module_catalog` pass on
+  the same archive.
+- `uv run ruff check .` and `uv run pytest -q tests` pass.
+- The tested archive is built from the tested Git mod tree; every entry is compared byte-for-byte
+  with the corresponding Git blob and its SHA-256 is recorded.
+
+The human multiplayer acceptance test is separate and must use a real Factorio client on the
+persistent isolated server. Synthetic characters used by automated obstacle checks do not count as
+human multiplayer verification.
+
 ## Pass criteria
 
 Do not promote the mod beyond development status until all relevant checks pass on the actual Factorio 2.1.24 executable and the user's enabled mod set. Record the save copy, mod list, Factorio build, test actions, RCON logs, event payloads and before/after inventory counts.

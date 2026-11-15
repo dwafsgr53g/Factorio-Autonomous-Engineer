@@ -21,19 +21,29 @@ This is an early alternative implementation, not yet a feature-complete fork/rep
   deduplication, and a three-module Nauvis starter library (electric iron mining, stone-furnace
   smelting bank, iron-gear assembling machine).
 
-## Stage 5 boundary
+## Stage 5 — Layout Planner
 
-Stage 4 stops at the module format, catalog, validation and deterministic ghost instantiation. The
-next stage may implement a Layout Planner that selects modules, chooses supported sites and submits
-internal placement specifications. Stage 4 does not implement automatic site search, whole-base
-generation, inter-module belt/pipe/rail/circuit routing, throughput optimization, logistic-network
-delivery or blueprint-book ingestion.
+Stage 5 adds a deterministic Layout Planner on top of the Stage-4 catalog:
+
+- production dependency resolution from module ports and live recipes;
+- bounded candidate placement inside the existing work area with resource, terrain and electric
+  constraints;
+- hard avoidance of buildings, vehicles, player construction ghosts and player work areas;
+- documented deterministic scoring/tie-breaking and plan/environment fingerprints;
+- persistent two-phase `plan_layout` / `apply_layout` lifecycle, stale-plan rejection and
+  idempotent ghost-only application;
+- explicit coal/fuel and electric-infrastructure dependencies and route-required item edges;
+- human multiplayer acceptance remains a separate gate.
+
+Still out of scope: belt/pipe/rail/circuit/wire routing, inserter placement and fuel insertion,
+power generation, throughput optimization, complete starter-base generation, construction robots,
+logistic delivery, blueprint-book ingestion, planetary module libraries and deconstruction.
 
 ## Next parity work
 
 - Add a general goal/plan executor and a stage/planet-aware capability registry.
 - Add high-level automation, crafting, delivery, repair and refuelling workflows.
-- Build the Layout Planner on top of the Stage-4 catalog and instantiator; the LLM should submit intent and constraints, not each placement coordinate. The current construction executor handles a small code-owned test plan, player ghosts and internal module ghosts.
+- Extend the Stage-5 planner with routing, power/fuel modules and production-rate-aware sizing after those capabilities exist.
 - Add module/equipment-aware ghost requests and item-request-proxy handling, arbitrary belt/pipe layout, construction robots and logistics-network delivery after the paid-ghost foundation is extended.
 - Add planet-specific bootstrap/site planners and survival skills for Vulcanus, Fulgora, Gleba and Aquilo.
 - Add production and science-chain analysis as compact strategic state.

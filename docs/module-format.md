@@ -172,8 +172,8 @@ geometry.ports = {
 - `capacity` is reserved for future connection metadata and is not interpreted in Stage 4.
 
 Ports describe interfaces only. Stage 4 does **not** route belts, pipes, wires or trains between
-modules. A future Layout Planner may use these ports for matching, but no such planner is
-implemented here.
+modules. The Stage-5 Layout Planner uses these ports for deterministic dependency matching and
+connection metadata, but still does not route a physical connection.
 
 ## 6. Requirements and availability
 
@@ -399,7 +399,8 @@ With `unit_count = 3` the effective footprint is `6 x 2`; furnace positions are
 
 ## 15. Unsupported in Stage 4
 
-- Layout Planner / automatic site search or optimization.
+- Stage-4-only: automatic site search or layout optimization. (The Stage-5 Layout Planner is a
+  separate deterministic planner; it does not change this schema.)
 - Arbitrary belt, pipe, rail, circuit or wire routing between ports.
 - Blueprint import/export as a canonical source, blueprint books, tile ghosts.
 - Insert plans, modules, equipment, ammunition or item-request proxies in module definitions.

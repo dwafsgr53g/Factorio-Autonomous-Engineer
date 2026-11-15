@@ -87,3 +87,27 @@ them internally after it has selected an intent; the LLM still supplies no coord
 lists.
 
 See [module-format.md](module-format.md) and [module-library.md](module-library.md).
+
+## Layout planning
+
+Stage 5 adds two high-level model-facing objectives:
+
+- `plan_layout(goal_item=...)` resolves the module dependency graph and a deterministic placement.
+  It stores the plan and returns a compact summary. It creates no entity and spends no item.
+- `apply_layout(plan_id=...)` revalidates the stored plan and asks the Stage-4 module placer for
+  validated module ghosts only.
+
+The planner owns dependency resolution, candidate generation, collision/player/ghost avoidance,
+orientation selection, scoring, clearing-requirement recording, fingerprints and stale detection.
+The model supplies no coordinates or module placements. Public summaries exclude anchors, ports,
+entity lists and ghost unit numbers.
+
+A plan has a stable `plan_id`, fingerprint and environment signature. Repeated apply is idempotent.
+Player-built plan entities are recognised; player-cancelled plan ghosts are never recreated.
+`stale_plan` is returned after any conflicting world change. Plans survive save/load.
+
+The plan is not a working factory. Item/fluid edges are `route_required`; coal fuel and electric
+infrastructure are explicit unresolved dependencies unless an existing network is detected. Paid
+construction, clearing and material transfer remain the existing `assist_construction` executor.
+
+See [layout-planner.md](layout-planner.md).

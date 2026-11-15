@@ -52,6 +52,34 @@ code-owned planners. They are not MCP tools; the LLM receives neither absolute p
 coordinates nor raw entity lists. The model continues to assist player-created blueprints through
 the same `assist_construction` objective.
 
+## Procedural Layout Planner
+
+`lib/production_graph.lua` resolves a requested output item into a minimal module chain from the
+Stage-4 catalog and live recipe/prototype data. It verifies declared output ports against recipe
+products, infers a unique process recipe for modules without script-assignable recipes (the stone
+furnace), classifies extraction modules and reports missing item, fuel and electric
+infrastructure dependencies. It performs no throughput calculation.
+
+`lib/layout_planner.lua` is a deterministic, save-persistent two-phase planner. Phase A resolves
+the graph, generates bounded candidates inside the existing 64-tile work area, scores placements
+with documented integer weights/tie-breakers, validates collisions through
+`module_placer.evaluate`, and stores anchors, orientations, ports, connection metadata, clearing
+requirements, a plan fingerprint and a local environment signature. It creates no entity. Phase B
+revalidates the stored plan against the live world and asks `module_placer` for ordinary entity
+ghosts only. A changed world produces `stale_plan`; the planner does not overwrite player buildings
+or construction ghosts, does not recreate cancelled ghosts, and does not duplicate already-applied
+module instances.
+
+Logical item/fluid edges are `route_required`; compatible ports never imply a physical connection.
+An existing pole network can mark an electric edge `externally_supplied`, but pole presence is not
+proof of supply-area coverage. Coal/fuel and future power generation remain external dependencies.
+Belts, pipes, inserters, wires, fuel insertion and throughput optimization belong to later stages.
+
+The model-facing interface is only `plan_layout(goal_item)` and `apply_layout(plan_id)`. Public
+summaries exclude coordinates, ports, entity lists and ghost unit numbers. Full planning records are
+available only through internal RCON operations for the engine harness and future code-owned
+workflows. Actual paid construction remains the Stage-3 `assist_construction` path.
+
 ## Shared-world collaboration
 
 Player actions are reconciled against the same ghost and entity objects. The executor does not delete, deconstruct or reconfigure player buildings. A player completion is recognized by the real entity at the ghost position, a cancellation by the absence of both ghost and replacement entity, and a blueprint change by a new ghost identity. Player presence near a target defers that target rather than racing the player. Materials removed by a player from a chest are observed through the actual inventory counts at transfer time.

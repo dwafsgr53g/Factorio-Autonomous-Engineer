@@ -52,6 +52,7 @@ scenarios never inherit each other's state.
 | `s5_construction.py` | scenarios A–G: ghost-only plan placement, paid builds, ordinary-chest acquisition, missing materials, full inventory, player blueprints, player cancellations/builds/plan changes, tree/rock clearing and preservation of nearby player entities |
 | `s6_construction_persistence.py` | scenario H: save/load during clearing and after a chest transfer, safety pre-emption + explicit resume, cancel, player interference, player chest withdrawal and death/respawn with construction materials |
 | `s7_module_catalog.py` | Stage 4 A–E: catalog loading and invalid-definition diagnostics, ghost-only instantiation of all modules, geometry/orientation/port/reserved-area checks, collision and resource constraints, paid module construction with recipe configuration, save/load instance identity/deduplication and construction resume |
+| `s8_layout_planner.py` | Stage 5 A–E: live iron-gear dependency chain, all mining orientations, resource-patch placement, building/player-ghost/player-work-radius avoidance, clearing requirements, deterministic fingerprints, ghost-only apply, idempotent repeated apply, save/load, cancellation/build reconciliation, stale-plan rejection and the compact MCP `plan_layout` surface |
 
 Run one at a time (they share port 27075):
 
@@ -66,6 +67,16 @@ Stage-4 module helpers: `module_catalog`, `module_definition`, `module_validate`
 `research_all` (test scaffolding on the disposable force) and `find_resource_anchor`. Module
 operations are internal RCON operations, not model-facing MCP tools. `research_all` is only for
 engine test setup; it is not part of the agent's normal capability set.
+
+Stage-5 Layout Planner helpers: `plan_layout`, `apply_layout`, `layout_plan_status`,
+`layout_plans`, `plan_layout_public`, `apply_layout_public`, `ghost_tags`, `real_counts` and
+`set_home`. The create/apply/status/limits operations are internal RCON operations. `set_home` is an
+administrative test/setup operation, not a model-facing MCP tool. The public projections are the
+same compact summaries returned by the `plan_layout` and `apply_layout` MCP tools.
+
+Human multiplayer acceptance for Stage 5 is not part of this automated suite. It must use a real
+Factorio client connected to the persistent isolated server; synthetic characters created by the
+harness are only collision-avoidance test objects.
 
 Each script prints its evidence and exits non-zero on failure.
 

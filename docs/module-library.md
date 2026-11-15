@@ -101,8 +101,10 @@ ghost requirement and performs all material checks.
 ## What was not tested
 
 - This is **not** a complete working factory or a production-ready module set.
-- No automatic Layout Planner, inter-module belt/pipe routing, power wiring, inserter placement,
-  fuel delivery, module/beacon insertion, logistic network or construction robots exist.
+- No inter-module belt/pipe routing, power wiring, inserter placement, fuel delivery,
+  module/beacon insertion, logistic network or construction robots exist.
+- The Stage-5 Layout Planner can select and place this library's modules as a dependency-checked
+  plan, but it does not make the resulting chain operational.
 - Only the initial Nauvis library is included; no other planet libraries exist.
 - Blueprint export/import and blueprint-book ingestion are not implemented.
 - The modules were verified on a disposable baseline save with all technologies unlocked for the
