@@ -40,9 +40,10 @@ def check(results: list[tuple[str, bool, str]], name: str, condition: bool,
 def prepare(save: str, *, coal: bool = True, power: bool = True,
             materials: bool = True, coal_offset: tuple[int, int] = (2, 0),
             material_chest: bool = False,
-            block_route: bool = False) -> tuple[h.Bridge, dict, dict]:
+            block_route: bool = False,
+            baseline: str = "baseline.zip") -> tuple[h.Bridge, dict, dict]:
     """Create a disposable Stage-6 world and return (bridge, plan, fixture_details)."""
-    h.load_scenario_save(save)
+    h.load_scenario_save(save, baseline=baseline)
     b = h.bridge()
     h.lua(f"game.speed = {GAME_SPEED}", b)
     h.research_all(b)

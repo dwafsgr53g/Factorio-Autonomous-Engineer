@@ -104,8 +104,9 @@ def scenario_a() -> None:
           h.pretty(observed))
     source = "\n".join(path.read_text(encoding="utf-8")
                        for path in (h.ROOT / "mod" / "factorio_autonomous_engineer").rglob("*.lua"))
-    forbidden = ["force_insert_at", "insert_at(", "insert_at_back", "remove_item(",
-                 "get_transport_line"]
+    # Stage 7 permits read-only LuaTransportLine observation for flow diagnostics.
+    # Mutating transport-line APIs remain forbidden.
+    forbidden = ["force_insert_at", "insert_at(", "insert_at_back", "remove_item("]
     check("production code contains no transport-line mutation API",
           not any(token in source for token in forbidden),
           h.pretty([token for token in forbidden if token in source]))

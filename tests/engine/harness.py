@@ -263,6 +263,15 @@ def task_status(task_id: str, b: Bridge | None = None) -> dict:
     return (b or bridge()).call("task_status", {"task_id": task_id})["result"]
 
 
+def task_cancel(task_id: str, reason: str = "cancelled", b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("task_cancel", {
+        "task_id": task_id, "reason": reason})["result"]
+
+
+def task_resume(task_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("task_resume", {"task_id": task_id})["result"]
+
+
 TERMINAL = {"succeeded", "failed", "cancelled", "partial", "missing_materials", "blocked"}
 
 
@@ -614,9 +623,33 @@ def layout_chain_plan(goal_item: str = "iron-gear-wheel", *, force_new: bool = T
     })["result"]
 
 
+def layout_multi_consumer_plan(goal_item: str = "iron-gear-wheel", *,
+                               force_new: bool = True,
+                               b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("layout_plan_create", {
+        "goal_item": goal_item, "multi_consumer": True, "force_new": force_new,
+    })["result"]
+
+
 def logistics_plan_create(layout_plan_id: str, b: Bridge | None = None) -> dict:
     return (b or bridge()).call(
         "logistics_plan_create", {"layout_plan_id": layout_plan_id})["result"]
+
+
+def logistics_plan_expansion(layout_plan_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call(
+        "logistics_plan_expansion", {"layout_plan_id": layout_plan_id})["result"]
+
+
+def transport_probe(*, splitter: dict | None = None,
+                    underground: dict | None = None,
+                    b: Bridge | None = None) -> dict:
+    params: dict = {}
+    if splitter is not None:
+        params["splitter"] = splitter
+    if underground is not None:
+        params["underground"] = underground
+    return (b or bridge()).call("transport_probe", params)["result"]
 
 
 def logistics_plan_status(logistics_plan_id: str, b: Bridge | None = None) -> dict:

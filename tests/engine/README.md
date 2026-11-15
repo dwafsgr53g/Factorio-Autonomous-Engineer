@@ -57,6 +57,10 @@ scenarios never inherit each other's state.
 | `s10_inserters.py` | Stage 6 B: six inserter roles and pickup directions, real pickup/drop targets, ore/plate movement, coal consumption, full output chest back-pressure and engine-driven resume |
 | `s11_power_distribution.py` | Stage 6 C: missing power source, pole coverage, legal wire reach, preserved player wiring, real network membership and unpowered detection after supply removal |
 | `s12_gear_production.py` | Stage 6 D: full ore→plate→gear production over ticks, exact paid costs, save/load during construction/material collection/monitoring, safety/death interruption, empty coal chest, player route conflict, distant-player planning, one-trip batch material acquisition, walk-out from a pending ghost and walk-off a working belt |
+| `s13_splitter_networks.py` | Stage 7 A: one-to-two splitting, two-to-one merging, both consumers supplied, common output, splitter type/direction/connectors, blocked branch preservation, full-output back-pressure, depleted fuel and no transport-line mutation |
+| `s14_underground_belts.py` | Stage 7 B: live yellow-belt reach, min/max distance, over-range rejection, splitter geometry, reciprocal underground neighbours, paid pair construction and coal transfer, player-owned endpoint protection |
+| `s15_multi_consumer_expansion.py` | Stage 7 C: working Stage-6 chain plus parallel multi-consumer cell, both factories operational, unchanged old units, all 14 routes/splitters/underground pair connected, merged gear output |
+| `s16_factory_persistence.py` | Stage 7 D: save/load during construction and production, repeated execution, cancellation/restart, player-removed route, safety and death recovery without duplication |
 
 Run one at a time (they share RCON/game ports inside a profile). Never point two profiles at the
 same RCON port. `stop_server()` terminates only the Factorio process whose command line contains the
@@ -93,6 +97,14 @@ must build the chain through `build_logistics`. Internal RCON helpers are `layou
 `logistics_plan_create`, `logistics_plan_status`, `logistics_ghosts_place`, `logistics_verify`,
 `logistics_plans`, `task_debug` and `task_entries`; they are not model-facing tools.
 
+Stage-7 helpers live in `stage7_fixture.py`. `prepare()` loads the clean `s7-baseline.zip`, clears a
+test area, creates a legal solar network and an ordinary coal chest, creates/applies a
+`multi_consumer` layout plan and creates the physical plan. It does not build the cell. The agent
+builds every module and logistics entity through `build_logistics(mode="multi_consumer")`.
+Internal helpers are `layout_multi_consumer_plan`, `logistics_plan_expansion`,
+`transport_probe`, `task_cancel` and `task_resume`. `transport_probe` only returns deterministic
+geometry/pair plans; it never creates or mutates an entity or transport line.
+
 Human multiplayer acceptance for Stage 5 is not part of this automated suite. It must use a real
 Factorio client connected to the persistent isolated server; synthetic characters created by the
 harness are only collision-avoidance test objects.
@@ -104,3 +116,21 @@ Each script prints its evidence and exits non-zero on failure.
 `.runtime/factorio-test/mods/ae_probe/` is a read-only probe that records what the engine exposes
 during a character death (`script-output/ae_probe.log`). It is only useful when debugging recovery
 changes and is not required for the scenarios.
+
+
+## Stage-7 isolated run
+
+Create a clean baseline once with the same Factorio 2.1.24 executable and mod set:
+
+```
+factorio.exe --config <s7>/config/config.ini --mod-directory <s7>/mods   --create <s7>/saves/s7-baseline.zip
+```
+
+Then run a Stage-7 scenario in the isolated Stage-7 profile:
+
+```
+FACTORIO_TEST_DIR="$PWD/.runtime/factorio-stage7-test" FACTORIO_RCON_PASSWORD=... FACTORIO_RCON_PORT=27078 FACTORIO_GAME_PORT=27039 FACTORIO_GAME_SPEED=60   uv run python tests/engine/s13_splitter_networks.py
+```
+
+Stage-7 scenarios use speed 60 except save/load, cancellation, safety and death windows, which
+temporarily use speed 1–5 and restore 60. A skipped scenario is never reported as PASS.
