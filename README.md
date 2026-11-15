@@ -60,7 +60,7 @@ uv run python -m unittest discover -s tests -v
 uv run python scripts/package_mod.py
 ```
 
-Python unit tests cover the private task polling contract and skill loading. They are not a substitute for loading the mod in Factorio. Follow [the engine test plan](docs/engine-test-plan.md) on a disposable save before real gameplay use.
+Python unit tests cover the private task polling contract and skill loading. They are not a substitute for loading the mod in Factorio. Automated engine scenarios (save/load, safety pre-emption, death recovery, RCON faults) live in [tests/engine](tests/engine/README.md) and drive a disposable headless server. Follow [the engine test plan](docs/engine-test-plan.md) on a disposable save before real gameplay use.
 
 ## Architecture and contribution rules
 
