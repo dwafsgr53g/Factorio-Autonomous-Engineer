@@ -729,7 +729,286 @@ local function store_plan(s, plan)
   return plan, false
 end
 
+-- Shared plan finalization: infrastructure evaluation, edge records, clearing summary,
+-- deterministic fingerprint and persistence. The generic planner and the Stage-6
+-- logistics-chain planner use exactly the same plan format.
+local function finalize_plan(s, p, graph, modules_plan, placed_by_node, center, order, unplaced)
+  local surface = s.agent.surface
+  local bounds_by_node = {}
+  for node_id, module in pairs(placed_by_node) do
+    bounds_by_node[node_id] = module.bounds
+  end
+  local infrastructure = production_graph.evaluate_infrastructure(graph, {
+    surface = surface, bounds_by_node = bounds_by_node, radius = ELECTRIC_RADIUS,
+  })
+  local edges = build_edges(graph, placed_by_node)
+
+  local clearing_modules, clearing_counts = 0, {}
+  for _, module in ipairs(modules_plan) do
+    if module.needs_clearing then
+      clearing_modules = clearing_modules + 1
+      for name, count in pairs(module.clearable) do
+        clearing_counts[name] = (clearing_counts[name] or 0) + count
+      end
+    end
+  end
+
+  local external = build_external_dependencies(graph)
+  local placement_valid = #unplaced == 0
+  local needs_clearing = clearing_modules > 0
+  local status
+  if not placement_valid then
+    status = "invalid"
+  elseif #external > 0 or needs_clearing then
+    status = "partial"
+  else
+    local blocking_missing = false
+    for _, record in ipairs(graph.missing or {}) do
+      if record.external ~= true then blocking_missing = true break end
+    end
+    status = blocking_missing and "partial" or "complete"
+  end
+  local placement_status = "invalid"
+  if placement_valid then
+    placement_status = needs_clearing and "requires_clearing" or "valid"
+  end
+
+  local plan = {
+    schema_version = M.SCHEMA_VERSION, goal_item = p.goal_item,
+    surface_index = surface.index, surface_name = surface.name,
+    center = center, radius = PLAN_RADIUS,
+    created_tick = game.tick,
+    status = status, placement_status = placement_status,
+    materializable = placement_valid,
+    unplaced = unplaced,
+    modules = modules_plan, order = order, edges = edges,
+    connection_counts = connection_counts(edges),
+    external_dependencies = external,
+    graph_status = graph.status,
+    available_modules = graph.available_modules,
+    selected_modules = graph.selected_modules,
+    consumers = graph.consumers, producers = graph.producers,
+    infrastructure = infrastructure,
+    clearing = {modules = clearing_modules, obstacles = clearing_counts},
+    throughput_analysis = graph.throughput_analysis,
+    application = {status = "not_applied", instances = {}, attempts = 0},
+    notes = {
+      "A layout plan is not an operational factory.",
+      "Item and fluid connections still require physical belt/pipe routing.",
+      "Electric network presence does not prove physical wire coverage.",
+      "Furnace fuel supply is not provided by the current module catalog.",
+    },
+    logistics = p.logistics_chain and {
+      mode = "linear_chain", belt_row = p.logistics_belt_row,
+      flow = "east", supported = true,
+    } or nil,
+  }
+  plan.fingerprint = digest(canonical_plan_text(plan))
+  local environment_signature = M.environment_signature(s, plan)
+  plan.environment_signature = environment_signature
+  plan.id = "plan_" .. digest(plan.fingerprint .. "|" .. tostring(environment_signature)):sub(1, 16)
+  for _, module in ipairs(plan.modules) do
+    module.instance_key = module_instance_key(plan.id, module.node_id)
+  end
+  local stored, reused = store_plan(s, plan)
+  return {ok = true, plan = stored, reused = reused}
+end
+
+-- Stage-6 logistics-chain planning mode. It uses the same production graph and module
+-- catalog as the generic planner, but places a strictly linear eastward chain with the
+-- exact tile gaps required for real belt/inserter geometry:
+--   producer [output inserter?] [belt] [input inserter?] consumer
+-- The generic planner remains the default and its behaviour is unchanged.
+local function chain_nodes(graph)
+  local by_id = {}
+  for _, node in ipairs(graph.nodes or {}) do by_id[node.id] = node end
+  local nodes = {}
+  for _, node_id in ipairs(graph.order or {}) do
+    local node = by_id[node_id]
+    if node and not node.unsupported then nodes[#nodes + 1] = node end
+  end
+  if #nodes < 2 then return nil, "chain_too_short" end
+  local item_edges = {}
+  for _, edge in ipairs(graph.edges or {}) do
+    if edge.kind == "item" and edge.status == "route_required" then
+      item_edges[tostring(edge.from) .. "->" .. tostring(edge.to)] = edge
+    end
+  end
+  for index = 1, #nodes - 1 do
+    local key = nodes[index].id .. "->" .. nodes[index + 1].id
+    if not item_edges[key] then return nil, "chain_not_linear" end
+  end
+  return nodes
+end
+
+local function is_crafting_entity(name)
+  local prototype = prototypes.entity[name]
+  return prototype and (prototype.type == "furnace" or prototype.type == "assembling-machine")
+end
+
+local function chain_gap(producer_name, consumer_name)
+  local output_inserter = is_crafting_entity(producer_name) and 1 or 0
+  local input_inserter = is_crafting_entity(consumer_name) and 1 or 0
+  return output_inserter + 1 + input_inserter
+end
+
+local function chain_overlaps(records, bounds)
+  local candidate = area_rect(bounds)
+  for _, record in ipairs(records) do
+    if rects_overlap(candidate, area_rect(record.bounds)) then return true end
+  end
+  return false
+end
+
+function M.create_logistics_chain(s, p)
+  local agent = s.agent
+  assert(agent and agent.valid, "Agent is not alive")
+  assert(not (s.safety and s.safety.active), "Safety controller is active")
+  assert(type(p.goal_item) == "string" and p.goal_item ~= "",
+    "goal_item must be a non-empty string")
+  local surface = agent.surface
+  local center = plan_center(s, agent)
+  local context = strategy.context(s)
+  local env = {
+    prototypes = prototypes, force = agent.force, surface = surface,
+    stage = context.stage.id,
+  }
+  local graph, error_record = production_graph.resolve(env, p.goal_item)
+  if not graph then
+    return {ok = false, reason = error_record and error_record.code or "goal_unresolved",
+      message = error_record and error_record.message or nil}
+  end
+  local nodes, chain_reason = chain_nodes(graph)
+  if not nodes then
+    return {ok = false, reason = "unsupported_chain", message = chain_reason}
+  end
+  if not p.force_new then
+    local candidates = {}
+    for _, existing in pairs(s.layout_plans and s.layout_plans.by_id or {}) do
+      if existing.goal_item == p.goal_item and existing.logistics
+        and existing.logistics.mode == "linear_chain" and existing.materializable then
+        candidates[#candidates + 1] = existing
+      end
+    end
+    table.sort(candidates, function(a, b)
+      if a.created_tick ~= b.created_tick then return a.created_tick > b.created_tick end
+      return a.id < b.id
+    end)
+    for _, existing in ipairs(candidates) do
+      local revalidation = M.revalidate(s, existing)
+      if revalidation.valid then return {ok = true, plan = existing, reused = true} end
+    end
+  end
+  local catalog = modules.load(env)
+  local definitions = {}
+  for _, summary in ipairs(catalog.modules) do
+    definitions[summary.id] = catalog.by_id[summary.id].definition
+  end
+  local first = nodes[1]
+  local first_definition = definitions[first.module_id]
+  if not first_definition or first.category ~= "mining" then
+    return {ok = false, reason = "unsupported_chain",
+      message = "the first chain step must be a catalog mining module"}
+  end
+  local candidates = resource_candidates(surface, center, first_definition, {0})
+  rough_sort_and_limit(candidates, center)
+  local best = nil
+  local last_reason = "no_candidate"
+  for _, candidate in ipairs(candidates) do
+    local evaluated = module_placer.evaluate(s, {
+      definition = first_definition, module_id = first.module_id,
+      anchor = candidate.anchor, orientation = 0, parameters = {},
+    })
+    if evaluated.ok then
+      local records = {}
+      local first_record = build_module_record(first, {
+        resolved = evaluated.resolved, orientation = 0, anchor = candidate.anchor,
+        clearable = evaluated.clearable, score = 0, terms = {},
+      })
+      records[#records + 1] = first_record
+      local valid = true
+      for index = 2, #nodes do
+        local previous_record = records[index - 1]
+        local node = nodes[index]
+        local definition = definitions[node.module_id]
+        if not definition then valid = false last_reason = "module_definition_missing" break end
+        local previous_name = previous_record.entities[1] and previous_record.entities[1].name
+        local next_expanded = format.expand(definition, {}, 0)
+        if not previous_name or not next_expanded then
+          valid = false last_reason = "unsupported_geometry" break
+        end
+        local next_name = next_expanded.entities[1] and next_expanded.entities[1].name
+        if not next_name or (prototypes.entity[next_name].type ~= "furnace"
+          and prototypes.entity[next_name].type ~= "assembling-machine") then
+          valid = false last_reason = "unsupported_consumer" break
+        end
+        local previous_expanded = format.expand(definitions[previous_record.module_id], {}, 0)
+        local gap = chain_gap(previous_name, next_name)
+        local anchor = {
+          x = previous_record.anchor.x + previous_expanded.footprint.width + gap,
+          y = candidate.anchor.y,
+        }
+        local next_evaluation = module_placer.evaluate(s, {
+          definition = definition, module_id = node.module_id,
+          anchor = anchor, orientation = 0, parameters = {},
+        })
+        if not next_evaluation.ok then
+          valid = false last_reason = next_evaluation.reason or "placement_invalid" break
+        end
+        local record = build_module_record(node, {
+          resolved = next_evaluation.resolved, orientation = 0, anchor = anchor,
+          clearable = next_evaluation.clearable, score = 0, terms = {},
+        })
+        if chain_overlaps(records, record.bounds) then
+          valid = false last_reason = "module_overlap" break
+        end
+        records[#records + 1] = record
+      end
+      if valid then
+        local end_x = records[#records].bounds[2].x
+        if end_x > center.x + PLAN_RADIUS then
+          last_reason = "chain_outside_work_area"
+        else
+          local clearing_count = 0
+          for _, record in ipairs(records) do
+            for _, count in pairs(record.clearable) do clearing_count = clearing_count + count end
+          end
+          local chain_center_x = (records[1].bounds[1].x + end_x) / 2
+          local score = math.abs(chain_center_x - center.x) * 2
+            + math.abs(candidate.anchor.y + 1.5 - center.y)
+            + clearing_count * M.SCORING.clearing_obstacle
+          if not best or score < best.score
+            or (score == best.score and candidate.anchor.x < best.anchor.x)
+            or (score == best.score and candidate.anchor.x == best.anchor.x
+              and candidate.anchor.y < best.anchor.y) then
+            best = {
+              records = records, score = score, anchor = candidate.anchor,
+              belt_row = candidate.anchor.y + 1.5,
+              clearable = evaluated.clearable,
+              clearable_count = clearing_count,
+            }
+          end
+        end
+      end
+    else
+      last_reason = evaluated.reason or "placement_invalid"
+    end
+  end
+  if not best then
+    return {ok = false, reason = "blocked_layout", message = last_reason}
+  end
+  local placed_by_node, modules_plan = {}, {}
+  for _, record in ipairs(best.records) do
+    placed_by_node[record.node_id] = record
+    modules_plan[#modules_plan + 1] = record
+  end
+  p.logistics_belt_row = best.belt_row
+  return finalize_plan(s, p, graph, modules_plan, placed_by_node, center,
+    graph.order, {})
+end
+
 function M.create(s, p)
+  if p.logistics_chain then return M.create_logistics_chain(s, p) end
   local agent = s.agent
   assert(agent and agent.valid, "Agent is not alive")
   assert(not (s.safety and s.safety.active), "Safety controller is active")
@@ -847,82 +1126,9 @@ function M.create(s, p)
     end
   end
 
-  local bounds_by_node = {}
-  for node_id, module in pairs(placed_by_node) do
-    bounds_by_node[node_id] = module.bounds
-  end
-  local infrastructure = production_graph.evaluate_infrastructure(graph, {
-    surface = surface, bounds_by_node = bounds_by_node, radius = ELECTRIC_RADIUS,
-  })
-  local edges = build_edges(graph, placed_by_node)
-
-  local clearing_modules, clearing_counts = 0, {}
-  for _, module in ipairs(modules_plan) do
-    if module.needs_clearing then
-      clearing_modules = clearing_modules + 1
-      for name, count in pairs(module.clearable) do
-        clearing_counts[name] = (clearing_counts[name] or 0) + count
-      end
-    end
-  end
-
-  local external = build_external_dependencies(graph)
-  local placement_valid = #unplaced == 0
-  local needs_clearing = clearing_modules > 0
-  local status
-  if not placement_valid then
-    status = "invalid"
-  elseif #external > 0 or needs_clearing then
-    status = "partial"
-  else
-    local blocking_missing = false
-    for _, record in ipairs(graph.missing or {}) do
-      if record.external ~= true then blocking_missing = true break end
-    end
-    status = blocking_missing and "partial" or "complete"
-  end
-  local placement_status = "invalid"
-  if placement_valid then
-    placement_status = needs_clearing and "requires_clearing" or "valid"
-  end
-
-  local plan = {
-    schema_version = M.SCHEMA_VERSION, goal_item = p.goal_item,
-    surface_index = surface.index, surface_name = surface.name,
-    center = center, radius = PLAN_RADIUS,
-    created_tick = game.tick,
-    status = status, placement_status = placement_status,
-    materializable = placement_valid,
-    unplaced = unplaced,
-    modules = modules_plan, order = order, edges = edges,
-    connection_counts = connection_counts(edges),
-    external_dependencies = external,
-    graph_status = graph.status,
-    available_modules = graph.available_modules,
-    selected_modules = graph.selected_modules,
-    consumers = graph.consumers, producers = graph.producers,
-    infrastructure = infrastructure,
-    clearing = {modules = clearing_modules, obstacles = clearing_counts},
-    throughput_analysis = graph.throughput_analysis,
-    application = {status = "not_applied", instances = {}, attempts = 0},
-    notes = {
-      "A layout plan is not an operational factory.",
-      "Item and fluid connections still require physical belt/pipe routing.",
-      "Electric network presence does not prove physical wire coverage.",
-      "Furnace fuel supply is not provided by the current module catalog.",
-    },
-  }
-  plan.fingerprint = digest(canonical_plan_text(plan))
-  local environment_signature = M.environment_signature(s, plan)
-  plan.environment_signature = environment_signature
-  plan.id = "plan_" .. digest(plan.fingerprint .. "|" .. tostring(environment_signature)):sub(1, 16)
-  for _, module in ipairs(plan.modules) do
-    module.instance_key = module_instance_key(plan.id, module.node_id)
-  end
-  local stored, reused = store_plan(s, plan)
-  if reused then return {ok = true, plan = stored, reused = true} end
-  return {ok = true, plan = stored, reused = false}
+  return finalize_plan(s, p, graph, modules_plan, placed_by_node, center, order, unplaced)
 end
+
 
 function M.revalidate(s, plan)
   local agent = s.agent

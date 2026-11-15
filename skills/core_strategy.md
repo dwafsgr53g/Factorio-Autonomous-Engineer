@@ -26,4 +26,12 @@ Construction is a high-level goal, not a list of placements. `assist_constructio
 
 Layout planning is also a high-level goal. `plan_layout(goal_item=...)` asks deterministic Lua code to resolve module dependencies and choose a bounded, collision-safe layout; `apply_layout(plan_id=...)` asks it to revalidate that plan and create module ghosts only. Never supply coordinates, orientations, port positions, entity IDs or ghost handles. Treat a partial plan honestly: `route_required` item links, missing coal/fuel, missing electric infrastructure or clearing requirements mean the layout is not an operational factory. Paid construction remains a separate `assist_construction` objective. A stale-plan response means the world changed; do not retry the same plan blindly.
 
+Physical logistics is the composite next step. `execute_task(task="build_logistics",
+goal_item=...)` plans a linear chain, builds real belts/inserters/a coal-chest fuel feed/electric
+poles, and verifies actual production. It needs a real powered electric network and an ordinary
+coal chest as prerequisites. A `blocked` result whose reason is `missing_power_source` or
+`missing_fuel_source` is an honest prerequisite gap; explain the required normal gameplay action
+and do not claim the chain is operational. Never request raw coordinates, belt sequences, wire
+connectors or machine-inventory operations.
+
 The Factorio mod owns all game mechanics and implementation details. Its internal code and raw world representation are deliberately outside the model's interface.

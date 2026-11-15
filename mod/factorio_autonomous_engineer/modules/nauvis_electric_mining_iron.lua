@@ -1,5 +1,7 @@
 -- Early Nauvis iron mining module: one electric mining drill.
--- The drill footprint is 3x3. Its output side faces east when the module is unrotated.
+-- The drill footprint is 3x3. Its entity direction is east so the engine's real output
+-- vector points at the declared east ore_output port. A north-facing entity would drop
+-- ore on the tile above the module and could never feed a belt routed from that port.
 return {
   schema_version = 1,
   id = "nauvis.electric_mining.iron",
@@ -19,7 +21,7 @@ return {
         id = "drill",
         name = "electric-mining-drill",
         position = {x = 1.5, y = 1.5},
-        direction = 0,
+        direction = 4,
       },
     },
     ports = {

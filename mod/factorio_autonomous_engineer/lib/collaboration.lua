@@ -55,6 +55,20 @@ function M.needs_scan(task)
   return not task.last_scan_tick or game.tick - task.last_scan_tick >= SCAN_INTERVAL
 end
 
+-- A composite task may own only its own ghosts. This keeps build_logistics from
+-- building unrelated player blueprints that happen to be inside the work area.
+local function ghost_matches_filter(task, ghost)
+  local filter = task.ghost_filter
+  if not filter then return true end
+  local tags = ghost.tags
+  if not tags then return false end
+  if filter.layout_plan_id and tags.ae_plan_id == filter.layout_plan_id then return true end
+  if filter.logistics_plan_id and tags.ae_logistics_plan_id == filter.logistics_plan_id then
+    return true
+  end
+  return false
+end
+
 -- Reconcile task.entries with the live world. A ghost that vanished is never recreated:
 -- if a real entity now occupies its place it is counted as built by someone else, otherwise
 -- it is treated as cancelled by a player.
@@ -68,7 +82,7 @@ function M.refresh(s, task, agent)
   }
   local current = {}
   for _, ghost in pairs(ghosts) do
-    if ghost.valid and ghost.ghost_type ~= "tile" then
+    if ghost.valid and ghost.ghost_type ~= "tile" and ghost_matches_filter(task, ghost) then
       local key = ghost_key(ghost)
       current[key] = ghost
       local entry = task.entries[key]

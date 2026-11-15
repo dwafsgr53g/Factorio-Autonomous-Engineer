@@ -1,6 +1,8 @@
 local construction = require("lib.construction")
 local collaboration = require("lib.collaboration")
 local clearing = require("lib.clearing")
+local layout_planner = require("lib.layout_planner")
+local logistics = require("lib.logistics")
 
 local M = {}
 
@@ -14,10 +16,18 @@ local PLAYER_WAIT_LIMIT = 60 * 15
 local SETTLE_TICKS = 10
 local PATH_TIMEOUT_TICKS = 60 * 20
 local MOVE_TIMEOUT_TICKS = 60 * 180
+local LOGISTICS_DEADLINE_TICKS = 60 * 60 * 30
+local LOGISTICS_CONSTRUCTION_RETRIES = 2
+local LOGISTICS_SETTLE_TICKS = 60 * 5
+local LOGISTICS_MONITOR_TICKS = 60 * 180
 
 local function distance(a, b)
   local dx, dy = a.x - b.x, a.y - b.y
   return math.sqrt(dx * dx + dy * dy)
+end
+
+local function position_key(position)
+  return tostring(position.x) .. "," .. tostring(position.y)
 end
 
 local function entity_key(entity)
@@ -152,7 +162,8 @@ local function tick_gather(s, task, agent)
   elseif task.phase == "moving" then
     if not task.target or not task.target.valid then task.phase, task.target = "search", nil return end
     local arrived = follow_path(agent, task)
-    if arrived or distance(agent.position, task.approach) <= 1.5 then
+    local arrival_tolerance = task.type == "build_logistics" and 0.55 or 1.5
+    if arrived or distance(agent.position, task.approach) <= arrival_tolerance then
       stop_character(agent)
       if agent.can_reach_entity(task.target) then
         task.deposits_used = task.deposits_used + 1
@@ -185,9 +196,109 @@ end
 -- Construction assistance
 ----------------------------------------------------------------------------
 
+local function finish_logistics(s, task, status, reason)
+  stop_character(s.agent)
+  local summary = collaboration.summary(task)
+  local verification = task.last_verification
+  if not verification and task.logistics_plan_id then
+    local ok, result = pcall(function()
+      return logistics.verify(s, {logistics_plan_id = task.logistics_plan_id})
+    end)
+    if ok then verification = result end
+  end
+  local observation = verification and verification.observation or {}
+  local connection_counts = {}
+  for _, record in ipairs(verification and verification.connection_statuses or {}) do
+    connection_counts[record.status] = (connection_counts[record.status] or 0) + 1
+  end
+  local physical = task.logistics_plan_id and logistics.status(s, task.logistics_plan_id)
+  local required_items = physical and physical.physical and physical.physical.required_items or {}
+  task.status, task.reason, task.finished_tick = status, reason, game.tick
+  task.result = {
+    success = status == "succeeded", status = status, task_id = task.id,
+    task = "build_logistics", reason = reason, goal_item = task.goal_item,
+    layout_plan_id = task.layout_plan_id,
+    logistics_plan_id = task.logistics_plan_id,
+    logistics_status = physical and physical.physical and physical.physical.status or nil,
+    connections = connection_counts, connection_total = #(verification and
+      verification.connection_statuses or {}),
+    power_status = verification and (verification.power and "connected" or "missing_power_source")
+      or "missing_power_source",
+    fuel_status = verification and (verification.fuel and "delivered" or "missing_fuel_source")
+      or "missing_fuel_source",
+    production = {
+      produced = observation.gear_produced == true,
+      gear_wheels = observation.output_gears or 0,
+      ore_seen = observation.ore_seen == true,
+      coal_seen = observation.coal_seen == true,
+      plate_seen = observation.plate_seen == true,
+      recipe_ok = observation.gear_recipe_ok == true,
+    },
+    required_items = required_items,
+    ghosts_total = summary.ghosts_total,
+    built_by_agent = summary.built_by_agent,
+    already_built = summary.already_built,
+    remaining = summary.remaining,
+    cancelled = summary.cancelled,
+    unsupported = summary.unsupported,
+    blocked = summary.blocked,
+    unreachable = summary.unreachable,
+    missing_materials = summary.missing_materials,
+    missing_material_total = summary.missing_material_total,
+    obstacles = summary.obstacles,
+    obstacles_cleared = summary.obstacles_cleared,
+    player_interference = summary.player_interference,
+    inventory_full = summary.inventory_full,
+    items_transferred = summary.items_transferred,
+  }
+end
+
 local function finish_construction(s, task, status, reason)
   stop_character(s.agent)
   local summary = collaboration.summary(task)
+  if task.type == "build_logistics" then
+    local remaining_ghosts = summary.remaining > 0
+    local retryable = remaining_ghosts
+      and summary.missing_material_total == 0
+      and summary.unsupported == 0
+      and summary.inventory_full ~= true
+      and (task.construction_retries or 0) < LOGISTICS_CONSTRUCTION_RETRIES
+    if retryable and status ~= "cancelled" then
+      task.construction_retries = (task.construction_retries or 0) + 1
+      for _, entry in pairs(task.entries or {}) do
+        if entry.ghost and entry.ghost.valid and entry.status ~= "built"
+          and entry.status ~= "already_built" and entry.status ~= "cancelled" then
+          entry.status, entry.reason, entry.path_failures = "pending", nil, 0
+        end
+      end
+      task.status, task.reason = "running", nil
+      task.phase = "search"
+      task.scan_dirty = true
+      task.settle_started_tick, task.player_wait_started_tick = nil, nil
+      task.started_tick = game.tick
+      task.deadline_ticks = LOGISTICS_DEADLINE_TICKS
+      return
+    end
+    if status == "succeeded" and not remaining_ghosts then
+      task.status, task.reason = "running", nil
+      task.phase = "verifying"
+      task.verify_started_tick = game.tick
+      task.monitor_started_tick = nil
+      return
+    end
+    if status == "partial" and not remaining_ghosts and summary.missing_material_total == 0
+      and summary.unsupported == 0 then
+      task.status, task.reason = "running", nil
+      task.phase = "verifying"
+      task.verify_started_tick = game.tick
+      task.monitor_started_tick = nil
+      return
+    end
+    local final_status = status
+    if status == "partial" then final_status = "blocked" end
+    finish_logistics(s, task, final_status, reason or status)
+    return
+  end
   task.status, task.reason, task.finished_tick = status, reason, game.tick
   task.result = {
     success = status == "succeeded", status = status, task_id = task.id,
@@ -225,9 +336,22 @@ local function pending_entries(task, agent)
       result[#result + 1] = entry
     end
   end
-  table.sort(result, function(a, b)
-    return distance(agent.position, a.position) < distance(agent.position, b.position)
-  end)
+  if task.type == "build_logistics" then
+    -- Build the far end of a physical chain first. A nearest-first pass builds belts and
+    -- inserters around the character and can enclose the remaining targets in a pocket
+    -- with no valid short path. Far-to-near reverses that failure mode while keeping the
+    -- same paid executor and the same deterministic tie-break.
+    table.sort(result, function(a, b)
+      local da = distance(agent.position, a.position)
+      local db = distance(agent.position, b.position)
+      if math.abs(da - db) > 1e-9 then return da > db end
+      return position_key(a.position) < position_key(b.position)
+    end)
+  else
+    table.sort(result, function(a, b)
+      return distance(agent.position, a.position) < distance(agent.position, b.position)
+    end)
+  end
   return result
 end
 
@@ -260,6 +384,12 @@ local function begin_path(task, agent, goal, kind)
   task.phase, task.phase_started_tick = "pathing", game.tick
   task.target_kind = kind
   return true
+end
+
+local function position_inside_box(position, box, margin)
+  margin = margin or 0
+  return position.x > box.left_top.x - margin and position.x < box.right_bottom.x + margin
+    and position.y > box.left_top.y - margin and position.y < box.right_bottom.y + margin
 end
 
 local function target_position(task)
@@ -365,6 +495,19 @@ local function choose_target(s, task, agent)
               if try_start_obstacle(s, task, agent, entry, context.surface, ghost, clearable) then
                 return true
               end
+            elseif not can_place
+              and position_inside_box(agent.position, ghost.bounding_box, 0.4) then
+              -- The character is standing inside the target footprint. Walk to a
+              -- position outside it before deciding that the ghost is blocked.
+              local approach = construction.approach_for_entity(
+                context.surface, ghost, agent)
+              if approach then
+                entry.status = "building"
+                task.target_entry, task.target_ghost = entry.key, ghost
+                if begin_path(task, agent, approach, "ghost") then return true end
+                clear_target(task)
+              end
+              set_entry_status(task, entry.key, "pending", "stepping_out")
             elseif not can_place then
               set_entry_status(task, entry.key, "blocked", "blocked_terrain")
             else
@@ -491,6 +634,14 @@ local function try_build_target(s, task, agent)
   end
   if collaboration.player_near(agent, ghost.position) then
     defer_entry(task, entry)
+    clear_target(task)
+    return
+  end
+  if position_inside_box(agent.position, ghost.bounding_box) then
+    -- A 2x2/3x3 ghost can contain the character if it stopped just short of its
+    -- approach point. Walk out first; do not misreport the character as a blocker.
+    entry.status, entry.reason = "pending", "agent_inside_ghost"
+    stop_character(agent)
     clear_target(task)
     return
   end
@@ -653,7 +804,8 @@ local function tick_construction(s, task, agent)
       return
     end
     local arrived = follow_path(agent, task)
-    if arrived or distance(agent.position, task.approach) <= 1.5 then
+    local arrival_tolerance = task.type == "build_logistics" and 0.55 or 1.5
+    if arrived or distance(agent.position, task.approach) <= arrival_tolerance then
       stop_character(agent)
       if task.target_kind == "ghost" then
         try_build_target(s, task, agent)
@@ -702,6 +854,133 @@ local function start_construction(s, p)
 end
 
 ----------------------------------------------------------------------------
+-- Physical logistics (Stage 6 composite task)
+----------------------------------------------------------------------------
+
+local function start_logistics(s, p)
+  local goal = p.goal_item or "iron-gear-wheel"
+  assert(type(goal) == "string" and goal ~= "", "goal_item must be a non-empty string")
+  s.next_task_id = (s.next_task_id or 0) + 1
+  s.task = {
+    id = tostring(s.next_task_id), type = "build_logistics", status = "running",
+    phase = "planning", goal_item = goal,
+    requested_plan_id = p.plan_id, layout_plan_id = nil, logistics_plan_id = nil,
+    entries = {}, obstacles_seen = {}, obstacles_cleared = {},
+    started_tick = game.tick, last_progress_tick = game.tick,
+    deadline_ticks = LOGISTICS_DEADLINE_TICKS,
+    construction_retries = 0, items_transferred = 0,
+    work_area = {available = true, radius = collaboration.work_radius(),
+      center = s.agent.position},
+  }
+  return {task_id = s.task.id, status = s.task.status, task = "build_logistics",
+    goal_item = goal}
+end
+
+local function tick_logistics_planning(s, task, agent)
+  if not task.layout_plan_id then
+    local request = {goal_item = task.goal_item, logistics_chain = true}
+    if task.requested_plan_id then
+      request.plan_id = nil
+    end
+    local result = layout_planner.create(s, request)
+    if not result.ok then
+      finish_logistics(s, task, "blocked", "layout_unavailable:" .. tostring(result.reason))
+      return
+    end
+    task.layout_plan_id = result.plan.id
+    return
+  end
+  if not task.logistics_plan_id then
+    local result = logistics.plan(s, {layout_plan_id = task.layout_plan_id})
+    if not result.ok then
+      task.last_logistics_failure = result.reason or result.status or "blocked_route"
+      if result.physical then task.logistics_plan_id = result.physical.id end
+      finish_logistics(s, task, "blocked", task.last_logistics_failure)
+      return
+    end
+    task.logistics_plan_id = result.physical.id
+  end
+  local applied = layout_planner.apply(s, {plan_id = task.layout_plan_id})
+  if not applied.ok then
+    task.last_logistics_failure = applied.status or "layout_apply_failed"
+    finish_logistics(s, task, "blocked", task.last_logistics_failure)
+    return
+  end
+  local placed = logistics.place_ghosts(s, {logistics_plan_id = task.logistics_plan_id})
+  if not placed.ok then
+    task.last_logistics_failure = placed.status or "logistics_ghosts_failed"
+    finish_logistics(s, task, "blocked", task.last_logistics_failure)
+    return
+  end
+  task.ghost_filter = {
+    layout_plan_id = task.layout_plan_id,
+    logistics_plan_id = task.logistics_plan_id,
+  }
+  task.entries, task.obstacles_seen, task.obstacles_cleared = {}, {}, {}
+  task.items_transferred = 0
+  task.scan_dirty, task.last_scan_tick = true, nil
+  task.settle_started_tick, task.player_wait_started_tick = nil, nil
+  task.phase, task.phase_started_tick = "search", game.tick
+  task.started_tick = game.tick
+  task.deadline_ticks = LOGISTICS_DEADLINE_TICKS
+end
+
+local function tick_logistics_verification(s, task, agent)
+  if not task.verify_started_tick then task.verify_started_tick = game.tick end
+  if game.tick - task.verify_started_tick < LOGISTICS_SETTLE_TICKS then return end
+  local ok, verification = pcall(function()
+    return logistics.verify(s, {logistics_plan_id = task.logistics_plan_id})
+  end)
+  if not ok then
+    finish_logistics(s, task, "failed", "verification_error:" .. tostring(verification))
+    return
+  end
+  task.last_verification = verification
+  task.last_progress_tick = game.tick
+  if not verification.entities then
+    if game.tick - task.verify_started_tick > LOGISTICS_SETTLE_TICKS + 60 * 30 then
+      finish_logistics(s, task, "blocked", "physical_entities_missing")
+    end
+    return
+  end
+  if not verification.power then
+    finish_logistics(s, task, "blocked", "missing_power_source")
+    return
+  end
+  if not verification.fuel then
+    finish_logistics(s, task, "blocked",
+      verification.observation.coal_seen and "missing_fuel_source:fuel_depleted"
+      or "missing_fuel_source:fuel_not_delivered")
+    return
+  end
+  if verification.produced then
+    finish_logistics(s, task, "succeeded", "production_observed")
+    return
+  end
+  task.monitor_started_tick = task.monitor_started_tick or game.tick
+  if game.tick - task.monitor_started_tick > LOGISTICS_MONITOR_TICKS then
+    finish_logistics(s, task, "failed", "production_not_observed")
+  end
+end
+
+local function tick_logistics(s, task, agent)
+  if game.tick - task.started_tick > (task.deadline_ticks or LOGISTICS_DEADLINE_TICKS) then
+    finish_logistics(s, task, "failed", "task_deadline_exceeded")
+    return
+  end
+  if task.phase == "planning" then
+    tick_logistics_planning(s, task, agent)
+    return
+  end
+  if task.phase == "verifying" then
+    tick_logistics_verification(s, task, agent)
+    return
+  end
+  if task.phase == "search" then reset_inflight_entries(task) end
+  tick_construction(s, task, agent)
+end
+
+----------------------------------------------------------------------------
 -- Public task interface
 ----------------------------------------------------------------------------
 
@@ -714,6 +993,9 @@ function M.start(s, p)
   assert(not (s.safety and s.safety.active), "Safety controller is active")
   if p.task == "assist_construction" then
     return start_construction(s, p)
+  end
+  if p.task == "build_logistics" then
+    return start_logistics(s, p)
   end
   assert(p.task == "gather_resource", "Unsupported task")
   assert(type(p.resource) == "string" and prototypes.item[p.resource], "Unknown resource item prototype")
@@ -767,6 +1049,8 @@ function M.tick(s)
   end
   if task.type == "assist_construction" then
     tick_construction(s, task, agent)
+  elseif task.type == "build_logistics" then
+    tick_logistics(s, task, agent)
   else
     tick_gather(s, task, agent)
   end
@@ -779,6 +1063,39 @@ function M.status(s, task_id)
   local safety = s.safety or {}
   local emergency = {active = safety.active == true, status = safety.status or "normal",
     reason = safety.reason, destination_kind = safety.destination_kind}
+  if task.type == "build_logistics" then
+    local summary = current_summary(task)
+    local verification = task.last_verification or {}
+    local observation = verification.observation or {}
+    return {
+      task_id = task.id, type = task.type, status = task.status, phase = task.phase,
+      reason = task.pause_reason,
+      goal_item = task.goal_item, layout_plan_id = task.layout_plan_id,
+      logistics_plan_id = task.logistics_plan_id,
+      ghosts_total = summary.ghosts_total,
+      built_by_agent = summary.built_by_agent,
+      already_built = summary.already_built,
+      remaining = summary.remaining,
+      cancelled = summary.cancelled,
+      unsupported = summary.unsupported,
+      blocked = summary.blocked,
+      unreachable = summary.unreachable,
+      missing_materials = summary.missing_materials,
+      missing_material_total = summary.missing_material_total,
+      obstacles = summary.obstacles,
+      obstacles_cleared = summary.obstacles_cleared,
+      player_interference = summary.player_interference,
+      inventory_full = summary.inventory_full,
+      items_transferred = summary.items_transferred,
+      logistics_status = logistics.status(s, task.logistics_plan_id or "").physical
+        and logistics.status(s, task.logistics_plan_id or "").physical.status or nil,
+      power_status = verification.power and "connected" or nil,
+      fuel_status = verification.fuel and "delivered" or nil,
+      produced = observation.gear_produced == true,
+      gear_wheels = observation.output_gears,
+      emergency = emergency,
+    }
+  end
   if task.type == "assist_construction" then
     local summary = current_summary(task)
     return {
@@ -818,7 +1135,9 @@ function M.cancel(s, task_id, reason)
   local task = s.task
   assert(task and (not task_id or task.id == task_id), "Unknown task ID")
   if task.status == "running" or task.status == "paused" then
-    if task.type == "assist_construction" then
+    if task.type == "build_logistics" then
+      finish_logistics(s, task, "cancelled", reason or "cancelled")
+    elseif task.type == "assist_construction" then
       finish_construction(s, task, "cancelled", reason or "cancelled")
     else
       finish_gather(s, "cancelled", reason or "cancelled")
@@ -834,7 +1153,19 @@ function M.resume(s, task_id)
   assert(s.agent and s.agent.valid, "Agent is not alive")
   assert(not (s.safety and s.safety.active), "Safety controller is still active")
   task.status, task.pause_reason = "running", nil
-  if task.type == "assist_construction" then
+  if task.type == "build_logistics" then
+    reset_inflight_entries(task)
+    clear_target(task)
+    task.started_tick, task.last_progress_tick = game.tick, game.tick
+    task.player_wait_started_tick, task.settle_started_tick = nil, nil
+    task.deadline_ticks = LOGISTICS_DEADLINE_TICKS
+    if task.phase == "verifying" then
+      task.verify_started_tick = game.tick
+      task.monitor_started_tick = nil
+    elseif task.phase ~= "planning" then
+      task.phase = "search"
+    end
+  elseif task.type == "assist_construction" then
     reset_inflight_entries(task)
     clear_target(task)
     task.started_tick, task.last_progress_tick = game.tick, game.tick
@@ -851,7 +1182,7 @@ end
 function M.on_agent_died(s)
   local task, agent = s.task, s.agent
   if task and task.status == "running" then
-    if task.type == "assist_construction" then
+    if task.type == "assist_construction" or task.type == "build_logistics" then
       task.status, task.pause_reason = "paused", "death"
       reset_inflight_entries(task)
       clear_target(task)

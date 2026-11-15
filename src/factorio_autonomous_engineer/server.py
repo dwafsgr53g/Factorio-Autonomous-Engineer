@@ -44,13 +44,19 @@ def create_server(bridge: Bridge) -> MCPServer:
         return json.dumps(response.get("result", response), ensure_ascii=False)
 
     @server.tool()
-    async def execute_task(task: Literal["gather_resource", "assist_construction"],
-                           resource: str | None = None, amount: int | None = None) -> str:
+    async def execute_task(task: Literal["gather_resource", "assist_construction",
+                                          "build_logistics"],
+                           resource: str | None = None, amount: int | None = None,
+                           goal_item: str | None = None) -> str:
         """Execute one high-level objective.
 
         gather_resource needs resource and amount. assist_construction discovers pending
-        construction ghosts in the executor-owned work area. Route, approach, movement,
-        mining, item transfer, clearing and building all happen inside the executor.
+        construction ghosts in the executor-owned work area. build_logistics plans a
+        deterministic linear production chain, builds real belts, inserters, a fuel feed
+        from an ordinary coal chest and electric poles connected to an existing powered
+        network, then verifies actual item movement and production. Route, approach,
+        movement, mining, item transfer, clearing, building and verification all happen
+        inside the executor.
         """
         if task == "gather_resource":
             if resource is None or amount is None:
@@ -58,6 +64,8 @@ def create_server(bridge: Bridge) -> MCPServer:
             if amount <= 0:
                 raise ToolError("amount must be a positive integer")
             spec = {"task": task, "resource": resource, "amount": amount}
+        elif task == "build_logistics":
+            spec = {"task": task, "goal_item": goal_item or "iron-gear-wheel"}
         else:
             spec = {"task": task}
         try:

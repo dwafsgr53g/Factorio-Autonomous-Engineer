@@ -7,6 +7,7 @@ local construction = require("lib.construction")
 local modules = require("lib.modules")
 local module_placer = require("lib.module_placer")
 local layout_planner = require("lib.layout_planner")
+local logistics = require("lib.logistics")
 
 local function state()
   storage.autonomous_engineer = storage.autonomous_engineer or {
@@ -20,7 +21,8 @@ operations.ping = function(s)
   return {mod_version = "0.1.0-dev", factorio_version = script.active_mods.base,
     agent_state = lifecycle.status(s),
     capabilities = {"get_briefing", "select_starting_site", "gather_resource",
-      "assist_construction", "plan_layout", "apply_layout", "safety", "respawn"}}
+      "assist_construction", "plan_layout", "apply_layout", "build_logistics",
+      "safety", "respawn"}}
 end
 operations.strategy_context = function(s) return strategy.context(s) end
 -- Internal administrative helper used by the engine harness and future code-owned site
@@ -126,6 +128,31 @@ operations.layout_plan_apply = function(s, p)
   assert(not (s.safety and s.safety.active), "Safety controller is active")
   return layout_planner.apply(s, p)
 end
+
+-- Internal Stage-6 physical logistics surface. These operations are used by the
+-- composite build_logistics task and by the engine harness. They are not model-facing
+-- tools: no coordinates, entity lists or wire data are returned to the LLM.
+operations.logistics_plan_create = function(s, p)
+  assert(not (s.safety and s.safety.active), "Safety controller is active")
+  return logistics.plan(s, p)
+end
+operations.logistics_plan_debug = function(s, p)
+  local ok, result = xpcall(function() return logistics.plan(s, p) end, debug.traceback)
+  return {ok = ok, result = ok and result or nil, traceback = not ok and result or nil}
+end
+operations.logistics_ghosts_place = function(s, p)
+  assert(not (s.safety and s.safety.active), "Safety controller is active")
+  return logistics.place_ghosts(s, p)
+end
+operations.logistics_verify = function(s, p)
+  return logistics.verify(s, p)
+end
+operations.logistics_plan_status = function(s, p)
+  return logistics.status(s, p.logistics_plan_id)
+end
+operations.logistics_plans = function(s, p)
+  return {ok = true, plans = logistics.plans(s)}
+end
 operations.layout_plan_status = function(s, p)
   return layout_planner.status(s, p.plan_id)
 end
@@ -155,6 +182,45 @@ operations.apply_layout = function(s, p)
   return layout_planner.public_apply_summary(layout_planner.apply(s, p))
 end
 operations.task_status = function(s, p) return tasks.status(s, p.task_id) end
+operations.task_debug = function(s, p)
+  local task = s.task
+  if not task then return {ok = false, reason = "no_task"} end
+  local function pos(entity)
+    return entity and entity.valid and {x = entity.position.x, y = entity.position.y} or nil
+  end
+  local pending = {}
+  for key, entry in pairs(task.entries or {}) do
+    if entry.status == "pending" or entry.status == "building" then
+      pending[#pending + 1] = {
+        key = key, status = entry.status, ghost_valid = entry.ghost and entry.ghost.valid or false,
+        path_failures = entry.path_failures, position = entry.position,
+      }
+    end
+  end
+  table.sort(pending, function(a, b) return a.key < b.key end)
+  return {ok = true, task_id = task.id, type = task.type, status = task.status,
+    phase = task.phase, phase_started_tick = task.phase_started_tick,
+    target_kind = task.target_kind, target_entry = task.target_entry,
+    target_ghost = pos(task.target_ghost), target_chest = pos(task.target_chest),
+    path_request = task.path_request, path_index = task.path_index,
+    agent = pos(s.agent), pending = pending,
+    scan_dirty = task.scan_dirty, last_scan_tick = task.last_scan_tick}
+end
+operations.task_entries = function(s, p)
+  local task = s.task
+  if not task then return {ok = false, reason = "no_task"} end
+  local entries = {}
+  for key, entry in pairs(task.entries or {}) do
+    entries[#entries + 1] = {
+      key = key, name = entry.name, position = entry.position,
+      status = entry.status, reason = entry.reason, missing = entry.missing,
+      path_failures = entry.path_failures,
+    }
+  end
+  table.sort(entries, function(a, b) return a.key < b.key end)
+  return {ok = true, task_id = task.id, type = task.type, status = task.status,
+    phase = task.phase, reason = task.reason, entries = entries}
+end
 operations.task_cancel = function(s, p)
   return tasks.cancel(s, p.task_id, p.reason or "cancelled")
 end

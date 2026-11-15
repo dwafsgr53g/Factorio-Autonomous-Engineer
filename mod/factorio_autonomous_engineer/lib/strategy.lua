@@ -94,6 +94,9 @@ function M.context(s)
     -- production goal or an existing plan ID, never coordinates or module placements.
     capabilities[#capabilities + 1] = "plan_layout"
     capabilities[#capabilities + 1] = "apply_layout"
+    -- Stage-6 composite objective: plan a linear chain, build the real belts,
+    -- inserters, fuel feed and electric poles, and verify production.
+    capabilities[#capabilities + 1] = "build_logistics"
   end
 
   return {

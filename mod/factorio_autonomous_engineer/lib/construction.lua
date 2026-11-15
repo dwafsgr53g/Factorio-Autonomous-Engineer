@@ -323,7 +323,31 @@ function M.approach_for_entity(surface, entity, agent)
     math.abs(box.left_top.y - entity.position.y),
     math.abs(box.right_bottom.y - entity.position.y)
   )
-  return M.approach(surface, entity.position, math.max(2.0, half + 1.0), agent)
+  local candidates = {}
+  for radius = math.max(2.0, half + 1.0), math.max(2.0, half + 1.0) + 4, 0.5 do
+    local steps = 24
+    for index = 0, steps - 1 do
+      local angle = index * (2 * math.pi / steps)
+      local candidate = {
+        x = entity.position.x + math.cos(angle) * radius,
+        y = entity.position.y + math.sin(angle) * radius,
+      }
+      local inside = candidate.x > box.left_top.x - 0.25
+        and candidate.x < box.right_bottom.x + 0.25
+        and candidate.y > box.left_top.y - 0.25
+        and candidate.y < box.right_bottom.y + 0.25
+      if not inside and surface.can_place_entity{
+        name = "character", position = candidate, force = agent.force} then
+        candidates[#candidates + 1] = candidate
+      end
+    end
+  end
+  table.sort(candidates, function(a, b)
+    local da, db = distance(a, entity.position), distance(b, entity.position)
+    if math.abs(da - db) > 0.25 then return da < db end
+    return distance(agent.position, a) < distance(agent.position, b)
+  end)
+  return candidates[1]
 end
 
 function M.build(agent, ghost)
@@ -425,7 +449,10 @@ function M.find_real_entity(surface, name, position)
   for _, entity in pairs(entities) do
     if entity.valid and entity.type ~= "entity-ghost" then
       local current = distance(entity.position, position)
-      if current <= 1.5 and (not best_distance or current < best_distance) then
+      -- A revived ghost and its real entity occupy exactly the same position. A wide
+      -- tolerance misidentifies an adjacent belt/inserter of the same prototype as the
+      -- target, which would leave the real ghost unbuilt and corrupt the ledger.
+      if current <= 0.25 and (not best_distance or current < best_distance) then
         best, best_distance = entity, current
       end
     end
