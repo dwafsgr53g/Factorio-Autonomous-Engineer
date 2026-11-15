@@ -70,7 +70,7 @@ def scenario_a() -> None:
     print("\nScenario A — inserter directions and real material movement")
     b, plan, details = f.prepare("s10a-inserters.zip")
     task_id = f.start_logistics(b)
-    result = h.wait_task(task_id, b, timeout=900)
+    result = h.wait_task(task_id, b, timeout=180)
     check("the chain task succeeds", result.get("status") == "succeeded",
           result.get("reason"))
     physical = details["physical"]["physical"]
@@ -150,7 +150,7 @@ def scenario_b() -> None:
     print("\nScenario B — full output inventory back-pressure")
     b, plan, details = f.prepare("s10b-full-output.zip")
     task_id = f.start_logistics(b)
-    result = h.wait_task(task_id, b, timeout=900)
+    result = h.wait_task(task_id, b, timeout=180)
     check("the chain starts successfully", result.get("status") == "succeeded",
           result.get("reason"))
     physical = details["physical"]["physical"]

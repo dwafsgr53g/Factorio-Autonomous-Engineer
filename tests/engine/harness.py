@@ -113,7 +113,11 @@ def start_server(save: str, *, wait_port: float = 60) -> None:
     deadline = time.monotonic() + wait_port
     while time.monotonic() < deadline:
         try:
-            bridge().call("ping")
+            probe = bridge()
+            probe.call("ping")
+            speed = os.environ.get("FACTORIO_GAME_SPEED")
+            if speed:
+                probe.lua(f"game.speed = {speed}")
             return
         except (OSError, BridgeError):
             time.sleep(1)

@@ -24,7 +24,7 @@ def scenario_a() -> None:
     before_inventory = h.snapshot(b)["main"]
     tick_before = int(h.lua("rcon.print(game.tick)", b) or 0)
     task_id = f.start_logistics(b)
-    result = h.wait_task(task_id, b, timeout=900)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  task:", h.pretty(result)[:900])
     check("the task succeeds only after production", result.get("status") == "succeeded",
           result.get("reason"))
@@ -63,10 +63,11 @@ def scenario_a() -> None:
 def scenario_b() -> None:
     print("\nScenario B - save/load during route construction")
     b, plan, details = f.prepare("s12b-save-construction.zip")
+    f.set_speed(b, 1)
     task_id = f.start_logistics(b)
-    h.wait(lambda: h.status(b)["task"].get("built_by_agent", 0) >= 3
+    h.wait(lambda: h.status(b)["task"].get("built_by_agent", 0) >= 2
            and h.status(b)["task"].get("remaining", 0) >= 1,
-           timeout=300, interval=0.5, what="some ghosts built and work remains")
+           timeout=120, interval=0.2, what="some ghosts built and work remains")
     before = h.status(b)["task"]
     print("  before save:", h.pretty(before)[:700])
     b = f.save_reload(b, "s12b-mid")
@@ -76,7 +77,7 @@ def scenario_b() -> None:
           after.get("status"))
     check("built progress survives", after.get("built_by_agent", 0) >= 3,
           h.pretty(after)[:300])
-    result = h.wait_task(task_id, b, timeout=900)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  final:", h.pretty(result)[:700])
     check("the chain completes after reload", result.get("status") == "succeeded",
           result.get("reason"))
@@ -91,11 +92,12 @@ def scenario_b() -> None:
 def scenario_c() -> None:
     print("\nScenario C - save/load during ordinary-chest material collection")
     b, plan, details = f.prepare("s12c-save-chest.zip", material_chest=True)
+    f.set_speed(b, 1)
     task_id = f.start_logistics(b)
     h.wait(lambda: (h.task_debug(b).get("target_kind") == "chest"
                     or h.status(b)["task"].get("items_transferred", 0) > 0)
            and h.status(b)["task"].get("status") == "running",
-           timeout=300, interval=0.5, what="chest acquisition")
+           timeout=120, interval=0.2, what="chest acquisition")
     before_items = h.snapshot(b)["main"]
     print("  before save inventory:", h.pretty(before_items)[:500])
     b = f.save_reload(b, "s12c-mid")
@@ -103,28 +105,34 @@ def scenario_c() -> None:
     check("transferred materials survive exactly once",
           after_items == before_items, h.pretty({"before": before_items,
                                                  "after": after_items}))
-    result = h.wait_task(task_id, b, timeout=900)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  final:", h.pretty(result)[:700])
     check("the chain completes after material-collection reload",
           result.get("status") == "succeeded", result.get("reason"))
     check("no material was duplicated",
           h.snapshot(b)["main"].get("electric-mining-drill", 0) == 0,
           h.pretty(h.snapshot(b)["main"]))
+    check("all pending construction materials were fetched in one batch trip",
+          result.get("acquisition_trips") == 1
+          and result.get("items_transferred", 0) >= 21,
+          h.pretty({"trips": result.get("acquisition_trips"),
+                    "transferred": result.get("items_transferred")}))
 
 
 def scenario_d() -> None:
     print("\nScenario D - save/load during production monitoring")
     b, plan, details = f.prepare("s12d-save-monitor.zip")
+    f.set_speed(b, 1)
     task_id = f.start_logistics(b)
     h.wait(lambda: h.status(b)["task"].get("phase") == "verifying"
            and h.status(b)["task"].get("status") == "running",
-           timeout=600, interval=0.5, what="verification/monitoring phase")
+           timeout=150, interval=0.2, what="verification/monitoring phase")
     b = f.save_reload(b, "s12d-mid")
     after = h.status(b)["task"]
     check("task is running in verification after load",
           after.get("status") == "running" and after.get("phase") == "verifying",
           h.pretty(after)[:400])
-    result = h.wait_task(task_id, b, timeout=600)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  final:", h.pretty(result)[:700])
     check("production is observed after the monitoring reload",
           result.get("status") == "succeeded" and result["production"]["produced"] is True,
@@ -139,12 +147,13 @@ def scenario_d() -> None:
 async def scenario_e() -> None:
     print("\nScenario E - Safety Controller pre-emption and explicit resume")
     b, plan, details = f.prepare("s12e-safety.zip")
+    f.set_speed(b, 5)
     runner = h.TaskRunner(b, poll_interval=1.0)
     execute = asyncio.create_task(runner.execute(
-        {"task": "build_logistics", "goal_item": "iron-gear-wheel"}, timeout=900))
+        {"task": "build_logistics", "goal_item": "iron-gear-wheel"}, timeout=300))
     await asyncio.to_thread(
         h.wait, lambda: h.status(b)["task"].get("built_by_agent", 0) >= 1,
-        timeout=300, what="first logistics unit built")
+        timeout=120, what="first logistics unit built")
     await asyncio.to_thread(h.spawn_attackers, 3, 8.0, b)
     result = await asyncio.wait_for(execute, timeout=180)
     print("  runner:", h.pretty(result)[:600])
@@ -162,7 +171,8 @@ async def scenario_e() -> None:
     check("the task does not resume automatically", paused.get("status") == "paused",
           h.pretty(paused)[:300])
     b.call("task_resume", {"task_id": result["task_id"]})
-    final = await asyncio.to_thread(h.wait_task, result["task_id"], b, timeout=900)
+    f.set_speed(b, 60)
+    final = await asyncio.to_thread(h.wait_task, result["task_id"], b, timeout=180)
     print("  final:", h.pretty(final)[:800])
     check("explicit resume completes the physical chain",
           final.get("status") == "succeeded", final.get("reason"))
@@ -176,9 +186,10 @@ async def scenario_e() -> None:
 def scenario_f() -> None:
     print("\nScenario F - death, recovery and explicit resume")
     b, plan, details = f.prepare("s12f-death.zip")
+    f.set_speed(b, 5)
     task_id = f.start_logistics(b)
     h.wait(lambda: h.status(b)["task"].get("built_by_agent", 0) >= 1,
-           timeout=300, what="first build before death")
+           timeout=120, what="first build before death")
     h.agent_lua("a.die() return ''", b)
     h.wait(lambda: h.status(b)["lifecycle"]["status"] != "alive", timeout=30,
            what="death registered")
@@ -192,7 +203,8 @@ def scenario_f() -> None:
           h.status(b)["task"].get("status") == "paused",
           h.pretty(h.status(b)["task"])[:300])
     b.call("task_resume", {"task_id": task_id})
-    final = h.wait_task(task_id, b, timeout=900)
+    f.set_speed(b, 60)
+    final = h.wait_task(task_id, b, timeout=180)
     print("  final:", h.pretty(final)[:800])
     check("resume after death completes the chain",
           final.get("status") == "succeeded", final.get("reason"))
@@ -210,7 +222,7 @@ def scenario_g() -> None:
     removed = h.remove_chest_items(chest_unit, "coal", 1000, b)
     print("  withdrawn coal:", removed)
     task_id = f.start_logistics(b)
-    result = h.wait_task(task_id, b, timeout=600)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  task:", h.pretty(result)[:900])
     check("the demo does not succeed without fuel",
           result.get("status") == "blocked", result.get("status"))
@@ -227,10 +239,11 @@ def scenario_g() -> None:
 def scenario_h() -> None:
     print("\nScenario H - player blocks a route while the agent works")
     b, plan, details = f.prepare("s12h-player.zip")
+    f.set_speed(b, 1)
     task_id = f.start_logistics(b)
     h.wait(lambda: h.status(b)["task"].get("built_by_agent", 0) >= 1
            and h.status(b)["task"].get("remaining", 0) >= 1,
-           timeout=300, interval=0.5, what="agent building")
+           timeout=120, interval=0.2, what="agent building")
     # A real player-owned building on the not-yet-built fuel corridor removes that ghost
     # and makes the planned route invalid. The agent must not silently claim success.
     physical = h.logistics_plan_create(plan["id"], b)["physical"]
@@ -254,7 +267,8 @@ def scenario_h() -> None:
     placed = h.create_chest(target_tile["x"] + 0.5, target_tile["y"] + 0.5,
                             {"wood": 1}, b)
     print("  player placed:", h.pretty(placed))
-    result = h.wait_task(task_id, b, timeout=600)
+    f.set_speed(b, 60)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  task:", h.pretty(result)[:900])
     check("the task does not report success after a player route conflict",
           result.get("status") != "succeeded", result.get("status"))
@@ -271,7 +285,7 @@ def scenario_i() -> None:
     player = h.create_player_character(anchor["x"] + 1.5, anchor["y"] - 12.5, b)
     print("  player:", h.pretty(player))
     task_id = f.start_logistics(b)
-    result = h.wait_task(task_id, b, timeout=900)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  final:", h.pretty(result)[:800])
     check("a player inside the scan area but outside the chain does not block planning",
           result.get("status") == "succeeded", result.get("reason"))
@@ -281,6 +295,80 @@ def scenario_i() -> None:
           h.pretty(player))
     h.remove_entity(player["unit"], b)
 
+
+def scenario_j() -> None:
+    print("\nScenario J - step out of a pending module ghost")
+    b, plan, details = f.prepare("s12j-stepout.zip")
+    f.set_speed(b, 1)
+    task_id = f.start_logistics(b)
+    h.wait(lambda: any(
+        entry["name"] in {"stone-furnace", "electric-mining-drill",
+                          "assembling-machine-1"}
+        and entry["status"] == "pending"
+        for entry in (h.task_entries(b).get("entries") or [])),
+        timeout=120, interval=0.2, what="a pending module ghost")
+    entries = h.task_entries(b).get("entries") or []
+    target = next(entry for entry in entries
+                  if entry["name"] in {"stone-furnace", "electric-mining-drill",
+                                       "assembling-machine-1"}
+                  and entry["status"] == "pending")
+    # Test scaffolding: place the character inside the agent-owned ghost, then let the
+    # executor recover. This is not a production movement mechanism.
+    h.lua("game.tick_paused = true", b)
+    h.agent_lua(
+        f"a.teleport({{x={target['position']['x']}, y={target['position']['y']}}}) return ''",
+        b)
+    h.lua("game.tick_paused = false", b)
+    h.wait(lambda: (h.status(b)["task"].get("step_out_count", 0) >= 1
+                    or h.status(b)["task"].get("status") in
+                    {"succeeded", "failed", "blocked", "partial"}),
+           timeout=120, interval=0.2, what="step out of ghost")
+    f.set_speed(b, 60)
+    result = h.wait_task(task_id, b, timeout=180)
+    print("  final:", h.pretty(result)[:900])
+    check("the task recovers and completes after being inside a ghost",
+          result.get("status") == "succeeded", result.get("reason"))
+    check("at least one normal walk-out from the ghost was recorded",
+          result.get("step_out_count", 0) >= 1,
+          h.pretty({"step_out": result.get("step_out_count"),
+                    "teleports": result.get("step_out_teleports")}))
+    check("the ghost recovery used normal walking rather than the emergency teleport",
+          result.get("step_out_teleports", 0) == 0,
+          h.pretty(result.get("step_out_teleports")))
+
+
+def scenario_k() -> None:
+    print("\nScenario K - step off a working belt before construction")
+    h.load_scenario_save("s12k-belt.zip")
+    b = h.bridge()
+    h.lua("game.speed = 60", b)
+    h.research_all(b)
+    h.clear_main_inventory(b)
+    h.clear_test_area(-20, -20, 40, 20, b, keep_resources=True)
+    h.set_home({"x": 0.5, "y": 0.5}, b)
+    belt = h.create_real_entity("transport-belt", 10.5, 0.5, direction=4, b=b)
+    ghost = h.create_ghost("transport-belt", 10.5, 4.5, direction=4, b=b)
+    h.give_items({"transport-belt": 1}, b)
+    h.lua("game.tick_paused = true", b)
+    h.agent_lua(
+        f"a.teleport({{x={belt['position']['x']}, y={belt['position']['y']}}}) return ''",
+        b)
+    h.lua("game.tick_paused = false", b)
+    task_id = h.task_start({"task": "assist_construction"}, b)["task_id"]
+    result = h.wait_task(task_id, b, timeout=90)
+    print("  final:", h.pretty(result)[:900])
+    check("the construction task succeeds after starting on a belt",
+          result.get("status") == "succeeded", result.get("reason"))
+    check("the character walked off the working belt",
+          result.get("belt_step_offs", 0) >= 1,
+          h.pretty({"belt_step_offs": result.get("belt_step_offs"),
+                    "teleports": result.get("step_out_teleports")}))
+    check("the belt recovery used normal walking",
+          result.get("step_out_teleports", 0) == 0,
+          h.pretty(result.get("step_out_teleports")))
+    check("the requested belt ghost was built",
+          bool(h.entity_at("transport-belt", ghost["position"]["x"],
+                           ghost["position"]["y"], 2, b)), h.pretty(ghost))
 
 async def main() -> int:
     scenario_a()
@@ -292,6 +380,8 @@ async def main() -> int:
     scenario_g()
     scenario_h()
     scenario_i()
+    scenario_j()
+    scenario_k()
     failed = [name for name, ok, _ in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed")
     if failed:

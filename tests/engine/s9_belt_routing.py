@@ -53,7 +53,7 @@ def scenario_a() -> None:
           all(connection["status"] == "route_planned"
               for connection in body["connections"]), h.pretty(body["connections"]))
     task_id = f.start_logistics(b)
-    result = h.wait_task(task_id, b, timeout=900)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  task:", h.pretty(result)[:900])
     check("the chain task succeeds", result.get("status") == "succeeded",
           result.get("reason"))
@@ -123,7 +123,7 @@ def scenario_b() -> None:
               physical.get("physical", {}).get("connections", [])),
           h.pretty(physical.get("physical", {}).get("connections")))
     task_id = f.start_logistics(b)
-    result = h.wait_task(task_id, b, timeout=120)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  task:", h.pretty(result)[:700])
     check("the composite task reports blocked without building",
           result.get("status") == "blocked"
@@ -159,10 +159,11 @@ def scenario_c() -> None:
 def scenario_d() -> None:
     print("\nScenario D — cancellation stops future construction")
     b, plan, details = f.prepare("s9d-cancel.zip")
+    f.set_speed(b, 1)
     task_id = f.start_logistics(b)
     h.wait(lambda: h.status(b)["task"].get("built_by_agent", 0) >= 2
            and h.status(b)["task"].get("remaining", 0) >= 1,
-           timeout=300, interval=0.5, what="some logistics built and work remains")
+           timeout=120, interval=0.2, what="some logistics built and work remains")
     before = len(h.entities_named(["transport-belt", "inserter", "medium-electric-pole",
                                    "wooden-chest"], b))
     cancelled = b.call("task_cancel", {"task_id": task_id, "reason": "stage6_test"})["result"]

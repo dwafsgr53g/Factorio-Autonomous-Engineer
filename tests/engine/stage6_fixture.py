@@ -8,6 +8,7 @@ with the same paid construction path used in normal gameplay.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -17,11 +18,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import harness as h  # noqa: E402
 
+GAME_SPEED = float(os.environ.get("FACTORIO_GAME_SPEED", "60"))
+
 MODULE_ITEMS = {
     "electric-mining-drill": 1,
     "stone-furnace": 1,
     "assembling-machine-1": 1,
 }
+
+
+def set_speed(b: h.Bridge, speed: float) -> None:
+    h.lua(f"game.speed = {speed}", b)
 
 
 def check(results: list[tuple[str, bool, str]], name: str, condition: bool,
@@ -37,6 +44,7 @@ def prepare(save: str, *, coal: bool = True, power: bool = True,
     """Create a disposable Stage-6 world and return (bridge, plan, fixture_details)."""
     h.load_scenario_save(save)
     b = h.bridge()
+    h.lua(f"game.speed = {GAME_SPEED}", b)
     h.research_all(b)
     h.lua("game.surfaces.nauvis.always_day = true", b)
     h.clear_main_inventory(b)
@@ -110,6 +118,7 @@ def save_reload(b: h.Bridge, name: str) -> h.Bridge:
     h.stop_server()
     h.start_server(name + ".zip")
     b = h.bridge()
+    h.lua(f"game.speed = {GAME_SPEED}", b)
     h.lua("game.tick_paused = false", b)
     return b
 

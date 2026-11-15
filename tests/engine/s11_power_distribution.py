@@ -87,7 +87,7 @@ def scenario_b() -> None:
     """, b)
     print("  player wire:", h.pretty(player_wire))
     task_id = f.start_logistics(b)
-    result = h.wait_task(task_id, b, timeout=900)
+    result = h.wait_task(task_id, b, timeout=180)
     print("  task:", h.pretty(result)[:900])
     check("the powered chain succeeds", result.get("status") == "succeeded",
           result.get("reason"))
@@ -178,7 +178,7 @@ def scenario_d() -> None:
           h.pretty(fixture))
     time.sleep(4)
     second_id = f.start_logistics(b)
-    second = h.wait_task(second_id, b, timeout=900)
+    second = h.wait_task(second_id, b, timeout=180)
     print("  second task:", h.pretty(second)[:800])
     check("a later run recomputes the physical plan and succeeds",
           second.get("status") == "succeeded", second.get("reason"))
