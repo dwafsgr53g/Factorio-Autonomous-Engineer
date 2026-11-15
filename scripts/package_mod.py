@@ -30,7 +30,12 @@ def main() -> None:
                 # Windows checkout materialized CRLF endings. Git stores LF for text files.
                 if path.suffix.lower() in TEXT_SUFFIXES:
                     data = data.replace(b"\r\n", b"\n")
-                archive.writestr(archive_name.as_posix(), data)
+                # Fixed entry metadata keeps the release archive byte-reproducible.
+                info = zipfile.ZipInfo(archive_name.as_posix(),
+                                       date_time=(2026, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o644 << 16
+                archive.writestr(info, data)
     print(f"Packaged: {args.output}")
 
 

@@ -166,7 +166,7 @@ Additional evidence:
 - Tested scenario commit: `7137c46de54c4fa74b8f306ed83d9438e5410f84`
 - Documentation commit containing this report: `e78d8d2d49cfd1b6cc425c10daa095cd974f0028`
 - Archive: `dist/factorio_autonomous_engineer_0.1.0.zip`
-- Archive SHA-256: `f001b0418bbfb3c50a60581bdfb4217aba31edfa1f56d72273aa2281e424c952`
+- Archive SHA-256: `960de382cda4e6ffcfdef339007c32c39dd65731f24bbf84dc7a14851cc371bf`
 - Archive size: 86,366 bytes
 - Entries: 21; Git mod blobs: 21; mismatches: **none**
 - Comparison: every archive entry was read byte-for-byte and compared with
