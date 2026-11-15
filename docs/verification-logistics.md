@@ -162,8 +162,19 @@ Additional evidence:
 
 ## Archive verification
 
-To be filled after the final commits: archive SHA-256, exact entry list comparison against Git
-blobs, and archive path.
+- Tested mod-tree commit: `b5f679e8038a3779c91e83f2000465b47372b4e2`
+- Tested scenario commit: `7137c46de54c4fa74b8f306ed83d9438e5410f84`
+- Documentation commit containing this report: `e78d8d2d49cfd1b6cc425c10daa095cd974f0028`
+- Archive: `dist/factorio_autonomous_engineer_0.1.0.zip`
+- Archive SHA-256: `f001b0418bbfb3c50a60581bdfb4217aba31edfa1f56d72273aa2281e424c952`
+- Archive size: 86,366 bytes
+- Entries: 21; Git mod blobs: 21; mismatches: **none**
+- Comparison: every archive entry was read byte-for-byte and compared with
+  `git show HEAD:mod/factorio_autonomous_engineer/<entry>`.
+
+The archive was rebuilt from the committed, clean mod tree after the engine runs. It is
+byte-identical to the tested tree (the archive builder normalizes CRLF checkout endings to the LF
+bytes stored by Git).
 
 ## Known limitations
 
