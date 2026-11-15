@@ -4,6 +4,8 @@ local tasks = require("lib.tasks")
 local strategy = require("lib.strategy")
 local site_selector = require("lib.site_selector")
 local construction = require("lib.construction")
+local modules = require("lib.modules")
+local module_placer = require("lib.module_placer")
 
 local function state()
   storage.autonomous_engineer = storage.autonomous_engineer or {
@@ -52,6 +54,61 @@ operations.construction_plan_place = function(s, p)
   assert(s.agent and s.agent.valid, "Agent is not alive")
   assert(not (s.safety and s.safety.active), "Safety controller is active")
   return construction.place_plan(s, p.plan or "test_basic")
+end
+
+-- Internal module-library surface. It is deliberately not a model-facing MCP tool:
+-- coordinates and raw entity lists are test/planner inputs, not LLM actions.
+local function module_env(s)
+  local agent = s.agent
+  assert(agent and agent.valid, "Agent is not alive")
+  local context = strategy.context(s)
+  return {prototypes = prototypes, force = agent.force, surface = agent.surface,
+    stage = context.stage.id}
+end
+
+operations.module_catalog = function(s, p)
+  local env = module_env(s)
+  local report = modules.report(env)
+  return report
+end
+operations.module_validate_definition = function(s, p)
+  local env = module_env(s)
+  return modules.validate_definition(p.definition, env)
+end
+operations.module_definition = function(s, p)
+  local entry = modules.resolve(module_env(s), p.module_id)
+  assert(entry, "Unknown module")
+  return entry.definition
+end
+operations.module_resolve = function(s, p)
+  p.stage = p.stage or strategy.context(s).stage.id
+  local resolved, reason, details = module_placer.resolve(s, p)
+  if not resolved then
+    return {ok = false, reason = reason, details = details}
+  end
+  return {ok = true, module = resolved.module, parameters = resolved.parameters,
+    orientation = resolved.orientation, anchor = resolved.anchor,
+    footprint = resolved.footprint, bounds = resolved.absolute_bounds,
+    entities = resolved.entities, ports = resolved.ports, reserved = resolved.reserved,
+    cost_estimate = resolved.cost_estimate}
+end
+operations.module_instantiate = function(s, p)
+  assert(not (s.safety and s.safety.active), "Safety controller is active")
+  p.stage = p.stage or strategy.context(s).stage.id
+  local result, reason, details = module_placer.instantiate(s, p)
+  if not result then
+    return {ok = false, reason = reason, details = details}
+  end
+  return {ok = true, deduplicated = result.deduplicated, instance = result.instance,
+    fingerprint = result.fingerprints}
+end
+operations.module_instance_status = function(s, p)
+  local result, reason = module_placer.instance_status(s, p.instance_key)
+  if not result then return {ok = false, reason = reason} end
+  return {ok = true, instance = result}
+end
+operations.module_instances = function(s, p)
+  return {ok = true, instances = module_placer.instances(s)}
 end
 operations.task_status = function(s, p) return tasks.status(s, p.task_id) end
 operations.task_cancel = function(s, p)

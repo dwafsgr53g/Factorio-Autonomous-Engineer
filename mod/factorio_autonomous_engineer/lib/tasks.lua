@@ -206,6 +206,8 @@ local function finish_construction(s, task, status, reason)
     obstacles = summary.obstacles,
     obstacles_cleared = summary.obstacles_cleared,
     failure_reasons = summary.failure_reasons,
+    configuration_errors = summary.configuration_errors,
+    configuration_failure_reasons = summary.configuration_failure_reasons,
     player_interference = summary.player_interference,
     inventory_full = summary.inventory_full,
     items_transferred = summary.items_transferred,
@@ -495,6 +497,7 @@ local function try_build_target(s, task, agent)
   local ok, reason, entity, proxy = construction.build(agent, ghost)
   if ok then
     entry.status, entry.reason = "built", nil
+    if reason then entry.configuration_error = reason end
     entry.built_unit = entity and entity.unit_number
     if proxy then entry.item_request_proxy = true end
     task.scan_dirty = true
@@ -795,6 +798,8 @@ function M.status(s, task_id)
       obstacles = summary.obstacles,
       obstacles_cleared = summary.obstacles_cleared,
       failure_reasons = summary.failure_reasons,
+      configuration_errors = summary.configuration_errors,
+      configuration_failure_reasons = summary.configuration_failure_reasons,
       player_interference = summary.player_interference,
       inventory_full = summary.inventory_full,
       items_transferred = summary.items_transferred,

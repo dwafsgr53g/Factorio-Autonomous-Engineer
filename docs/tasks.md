@@ -67,3 +67,23 @@ The executor owns the complete construction cycle:
 - Safety pre-emption has unconditional priority. Completed ledger entries survive; in-flight targets are reset only on explicit resume.
 - Save/load preserves the ledger, counters, chest transfers and in-flight target. A lost path request is retried a bounded number of times.
 - The MCP surface remains one high-level `assist_construction` objective, not a per-building control API.
+
+## Internal module instantiation
+
+Stage 4 adds an internal, code-owned module path separate from the model-facing task API:
+
+1. Resolve a stable module ID through the catalog (or fail closed with diagnostics).
+2. Resolve parameter values and the requested supported orientation.
+3. Validate the surface, hard blockers, reserved areas and declarative placement constraints.
+4. Compute absolute entity positions internally from the module anchor.
+5. Create only `entity-ghost` objects; spend no items and create no real entity.
+6. Record a save-persistent instance identity and deduplicate identical calls.
+7. Leave actual construction to the existing paid `assist_construction` executor.
+
+The module operations (`module_catalog`, `module_definition`, `module_validate_definition`,
+`module_resolve`, `module_instantiate`, `module_instance_status`, `module_instances`) are available
+only through the internal RCON bridge. They are not MCP tools. A future Layout Planner may call
+them internally after it has selected an intent; the LLM still supplies no coordinates or entity
+lists.
+
+See [module-format.md](module-format.md) and [module-library.md](module-library.md).

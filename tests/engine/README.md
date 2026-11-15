@@ -51,6 +51,7 @@ scenarios never inherit each other's state.
 | `s4b_mcp_restart.py` | SIGKILL of the MCP client mid-task: the task keeps its id, a fresh MCP process reports it, and the remaining amount completes exactly |
 | `s5_construction.py` | scenarios A–G: ghost-only plan placement, paid builds, ordinary-chest acquisition, missing materials, full inventory, player blueprints, player cancellations/builds/plan changes, tree/rock clearing and preservation of nearby player entities |
 | `s6_construction_persistence.py` | scenario H: save/load during clearing and after a chest transfer, safety pre-emption + explicit resume, cancel, player interference, player chest withdrawal and death/respawn with construction materials |
+| `s7_module_catalog.py` | Stage 4 A–E: catalog loading and invalid-definition diagnostics, ghost-only instantiation of all modules, geometry/orientation/port/reserved-area checks, collision and resource constraints, paid module construction with recipe configuration, save/load instance identity/deduplication and construction resume |
 
 Run one at a time (they share port 27075):
 
@@ -59,6 +60,12 @@ uv run python tests/engine/s3_death.py
 ```
 
 `harness.py` also provides construction setup helpers: `place_plan`, `create_ghost`, `cancel_ghost`, `build_ghost_as_player`, `create_chest`, `chest_contents`, `remove_chest_items`, `create_natural`, `create_player_character`, `give_items`, `fill_main_inventory`, `ghosts`, `entities_named` and `wait_task`. Direct ghost revival in `build_ghost_as_player` and direct `surface.create_entity` calls in setup are harness-only scaffolding; production construction uses paid ghost revival.
+
+Stage-4 module helpers: `module_catalog`, `module_definition`, `module_validate`,
+`module_resolve`, `module_instantiate`, `module_instance_status`, `module_instances`,
+`research_all` (test scaffolding on the disposable force) and `find_resource_anchor`. Module
+operations are internal RCON operations, not model-facing MCP tools. `research_all` is only for
+engine test setup; it is not part of the agent's normal capability set.
 
 Each script prints its evidence and exits non-zero on failure.
 

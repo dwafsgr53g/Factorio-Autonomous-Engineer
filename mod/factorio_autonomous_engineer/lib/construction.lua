@@ -341,6 +341,8 @@ function M.build(agent, ghost)
   local paid, payment = M.consume(agent, requirements)
   if not paid then return false, payment or "missing_material" end
   local surface, ghost_name, ghost_position = ghost.surface, ghost.ghost_name, ghost.position
+  local tags = ghost.tags
+  local module_recipe = tags and tags.ae_recipe or nil
   local ok, _collided, entity, proxy = pcall(function() return ghost.revive() end)
   if not ok or not entity or not entity.valid then
     -- A script error after the engine created the real entity must not result in both a
@@ -350,13 +352,31 @@ function M.build(agent, ghost)
     M.refund(agent, payment)
     return false, "revive_failed"
   end
+  local configuration_error = nil
+  if module_recipe then
+    if entity.type ~= "assembling-machine" then
+      configuration_error = "recipe_entity_unsupported"
+    else
+      local assigned, assign_error = pcall(function() return entity.set_recipe(module_recipe) end)
+      local current = nil
+      if assigned then
+        local read_ok, value = pcall(function() return entity.get_recipe() end)
+        current = read_ok and value and value.name or nil
+      end
+      if not assigned then
+        configuration_error = "recipe_assignment_failed:" .. tostring(assign_error)
+      elseif current ~= module_recipe then
+        configuration_error = "recipe_verification_failed"
+      end
+    end
+  end
   if ghost.valid then
     -- This should not occur in Factorio 2.1.24. The real entity and the ghost both exist,
     -- so the paid materials are not refunded; the caller records an explicit
     -- inconsistent state for the next strategic decision instead of silently duplicating.
     return true, "revive_inconsistent", entity, proxy
   end
-  return true, nil, entity, proxy
+  return true, configuration_error, entity, proxy
 end
 
 function M.obstacles(ghost, agent)

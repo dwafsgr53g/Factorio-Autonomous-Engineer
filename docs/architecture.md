@@ -22,6 +22,36 @@ The agent is a `LuaEntity` character, not a `LuaPlayer`; `LuaControl.build_from_
 
 Ordinary chests are searched by entity type (`container` and `logistic-container`) within the work area. No chest marker, whitelist, reservation or special permission exists. The executor walks to the selected chest, removes only the still-missing items, inserts them into the character inventory and returns any uninserted remainder immediately. Chest filters are untouched. Infinity containers are excluded. No logistic network or remote extraction is used.
 
+## Declarative module library
+
+`lib/module_format.lua` defines the canonical schema for reusable factory modules. A module is a
+pure declarative Lua data table under `modules/`, listed once by `modules/manifest.lua`. It describes
+stable identity/version, category, supported surfaces/stages, a local anchor and footprint, entity
+positions/directions/quality/recipe, item/fluid/electric ports, supported orientations, reserved
+areas, technology/recipe/stage requirements and declarative placement constraints. It contains no
+functions or arbitrary expressions.
+
+`lib/modules.lua` loads the parse-time preloaded library, rejects duplicate IDs and invalid
+definitions, resolves stable IDs and reports force/surface/stage availability separately from
+prototype existence. An invalid module is excluded entirely rather than partially interpreted.
+`lib/module_placer.lua` validates the target surface, parameters, orientation, hard blockers and
+supportable placement constraints, then creates **only** entity ghosts. It records module identity,
+instance key, anchor, orientation, resolved parameters, expected settings and ghost unit numbers in
+`storage` for reconciliation after save/load. Identical instantiations are deduplicated; an
+instance-key conflict is rejected.
+
+Module instantiation never creates real entities and never spends items. The existing
+`assist_construction` task and `lib/construction.lua` remain the only paid build path. A module ghost
+may carry a recipe tag; the executor applies that recipe with `set_recipe` after the paid revival
+and records a configuration error if it cannot. The construction result now reports
+`configuration_errors`, while module instance status distinguishes pending, built, missing,
+configuration mismatch and geometry mismatch.
+
+The module catalog/instantiation operations are internal RCON operations for tests and future
+code-owned planners. They are not MCP tools; the LLM receives neither absolute placement
+coordinates nor raw entity lists. The model continues to assist player-created blueprints through
+the same `assist_construction` objective.
+
 ## Shared-world collaboration
 
 Player actions are reconciled against the same ghost and entity objects. The executor does not delete, deconstruct or reconfigure player buildings. A player completion is recognized by the real entity at the ghost position, a cancellation by the absence of both ghost and replacement entity, and a blueprint change by a new ghost identity. Player presence near a target defers that target rather than racing the player. Materials removed by a player from a chest are observed through the actual inventory counts at transfer time.
@@ -38,7 +68,7 @@ The LLM selects milestones and high-level goals. The MCP server exposes a small,
 
 execute_task is one MCP call. Python sends task_start, then polls task_status privately until a terminal result or a safety interruption. Those internal RCON calls are not returned as separate tool messages. A task has a stable ID and a save-persistent state in the Factorio mod. If the MCP process disconnects, the task continues in Factorio; a later client can inspect the status by task ID.
 
-Terminal task results: succeeded, failed, cancelled, partial, missing_materials, blocked, interrupted_by_safety, interrupted_by_death. `assist_construction` distinguishes full success, partial completion, missing materials, impossible/blocked construction, player interference, inventory-full and cancellation. Nonterminal phases include searching, pathing, moving, clearing, acquiring, building, settling, waiting-for-player, paused, evacuating and respawning.
+Terminal task results: succeeded, failed, cancelled, partial, missing_materials, blocked, interrupted_by_safety, interrupted_by_death. `assist_construction` distinguishes full success, partial completion, missing materials, impossible/blocked construction, player interference, inventory-full and cancellation. Its result also carries `configuration_errors` for module ghosts whose post-revival recipe could not be applied and verified. Nonterminal phases include searching, pathing, moving, clearing, acquiring, building, settling, waiting-for-player, paused, evacuating and respawning.
 
 ## Safety priority
 

@@ -473,3 +473,83 @@ def remove_chest_items(unit: int, name: str, count: int,
     rcon.print(0)
     """
     return int(lua(code, b) or 0)
+
+
+# ---------------------------------------------------------------------------
+# Stage-4 module catalog and instantiation helpers (internal harness surface)
+# ---------------------------------------------------------------------------
+
+def module_catalog(b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("module_catalog")["result"]
+
+
+def module_definition(module_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("module_definition", {"module_id": module_id})["result"]
+
+
+def module_validate(definition: dict, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call(
+        "module_validate_definition", {"definition": definition})["result"]
+
+
+def module_resolve(module_id: str, anchor: dict, *, orientation: int = 0,
+                   parameters: dict | None = None, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("module_resolve", {
+        "module_id": module_id, "anchor": anchor, "orientation": orientation,
+        "parameters": parameters or {},
+    })["result"]
+
+
+def module_instantiate(module_id: str, anchor: dict, *, orientation: int = 0,
+                       parameters: dict | None = None, instance_key: str | None = None,
+                       b: Bridge | None = None) -> dict:
+    params = {"module_id": module_id, "anchor": anchor, "orientation": orientation,
+              "parameters": parameters or {}}
+    if instance_key is not None:
+        params["instance_key"] = instance_key
+    return (b or bridge()).call("module_instantiate", params)["result"]
+
+
+def module_instance_status(instance_key: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call(
+        "module_instance_status", {"instance_key": instance_key})["result"]
+
+
+def module_instances(b: Bridge | None = None) -> list:
+    return (b or bridge()).call("module_instances")["result"]["instances"]
+
+
+def research_all(b: Bridge | None = None) -> None:
+    '''Test scaffolding: unlock prototypes on the disposable scenario force.'''
+    lua('game.forces.player.research_all_technologies()', b)
+
+
+def find_resource_anchor(resource: str, width: int = 3, height: int = 3,
+                         minimum_amount: int = 9, radius: int = 180,
+                         b: Bridge | None = None) -> dict | None:
+    """Find a test-controlled resource footprint for a mining module."""
+    code = f"""
+    local s = game.surfaces.nauvis
+    local a = remote.call("factorio_autonomous_engineer","get_agent")
+    local resources = s.find_entities_filtered{{
+      name = {json.dumps(resource)}, type = "resource",
+      area = {{{{a.position.x - {radius}, a.position.y - {radius}}},
+                {{a.position.x + {radius}, a.position.y + {radius}}}}}}}
+    local best = nil
+    for _, r in pairs(resources) do
+      local ax = math.floor(r.position.x) - math.floor({width} / 2)
+      local ay = math.floor(r.position.y) - math.floor({height} / 2)
+      local area = {{{{ax, ay}}, {{ax + {width}, ay + {height}}}}}
+      local inside = s.find_entities_filtered{{name = {json.dumps(resource)},
+        type = "resource", area = area}}
+      local amount = 0
+      for _, e in pairs(inside) do amount = amount + e.amount end
+      if amount >= {minimum_amount} then
+        best = {{x = ax, y = ay, amount = amount, count = #inside}}
+        break
+      end
+    end
+    rcon.print(best and helpers.table_to_json(best) or "null")
+    """
+    value = lua_json(code, b)
+    return value or None

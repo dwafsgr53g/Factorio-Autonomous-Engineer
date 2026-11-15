@@ -154,6 +154,8 @@ function M.summary(task)
     obstacles = task.obstacles_seen or {},
     obstacles_cleared = task.obstacles_cleared or {},
     failure_reasons = {},
+    configuration_errors = 0,
+    configuration_failure_reasons = {},
     player_interference = task.player_interference == true,
     inventory_full = task.inventory_full == true,
     items_transferred = task.items_transferred or 0,
@@ -165,6 +167,11 @@ function M.summary(task)
     end
     if entry.status == "built" then
       summary.built_by_agent = summary.built_by_agent + 1
+      if entry.configuration_error then
+        summary.configuration_errors = (summary.configuration_errors or 0) + 1
+        summary.configuration_failure_reasons[entry.configuration_error] =
+          (summary.configuration_failure_reasons[entry.configuration_error] or 0) + 1
+      end
     elseif entry.status == "already_built" then
       summary.already_built = summary.already_built + 1
     elseif entry.status == "cancelled" then

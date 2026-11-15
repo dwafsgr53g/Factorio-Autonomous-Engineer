@@ -58,6 +58,35 @@ Run `tests/engine/s5_construction.py` and `tests/engine/s6_construction_persiste
 
 Do not count a construction scenario as engine-tested unless the script prints its evidence and exits 0. Record the actual commands and results in `docs/verification-construction.md`.
 
+## 7. Module catalog and instantiation
+
+Run `tests/engine/s7_module_catalog.py` against a disposable copy of the baseline save. The script
+uses the internal RCON module operations; it never sends absolute placement coordinates to an LLM.
+
+Expected observations:
+
+- A — catalog: all three initial modules load with unique stable IDs; invalid test definitions are
+  rejected with explicit diagnostics (schema version, unknown prototype, direction, position,
+  footprint, duplicate port, port bounds, unknown recipe/technology, unsupported entity/parameter);
+  force availability distinguishes prototype existence from researched/enabled requirements.
+- B — ghost instantiation: each module creates exactly its declared number of `entity-ghost`
+  objects, creates no real building and leaves the agent inventory unchanged.
+- C — geometry: actual ghost positions/directions match the resolved module geometry; every
+  advertised orientation is exercised; repeated furnace positions and port IDs are deterministic;
+  transformed mining ports and reserved areas are checked; resource-dependent placement is rejected
+  off-resource and a real blocker in the footprint is rejected.
+- D — construction integration: `assist_construction` builds a complete module through paid ghost
+  revival; exactly the expected items are consumed; real entity count/position/direction matches the
+  module; no duplicates or ghosts remain; the assembling-machine recipe is applied after revival and
+  verified.
+- E — save/load: module instance identity, ghost unit numbers and pending state survive a
+  save/reload; re-instantiating the same key does not duplicate ghosts or records; a construction
+  task saved mid-move resumes with the same task ID and completes exactly once.
+
+The Stage-3 scenarios `s5_construction.py`, `s6_construction_persistence.py` and all earlier
+reliability scenarios must be re-run on the same archive. Record results in
+`docs/verification-modules.md` and `docs/verification-construction.md`.
+
 ## Pass criteria
 
 Do not promote the mod beyond development status until all relevant checks pass on the actual Factorio 2.1.24 executable and the user's enabled mod set. Record the save copy, mod list, Factorio build, test actions, RCON logs, event payloads and before/after inventory counts.
