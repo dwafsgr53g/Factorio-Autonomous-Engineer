@@ -11,11 +11,14 @@ this test profile. The RCON password was supplied only through the required
 
 Tested mod archive: `dist/factorio_autonomous_engineer_0.1.0.zip`
 
-- SHA-256: `<filled after final archive>`
-- Git commit: `<filled after final commit>`
+- SHA-256: `f3587e040dd86fba0b0495674757eb3b6fb15f3db639fe3a7d61b10f59c07719`
+- Tested mod-tree commit: `03e917c87cb7e4e9b06d25f8157aa4b4e2ea68e4`
 
-The archive was built from the committed mod sources. A rebuild from the same Git commit was
-compared byte-for-byte with the tested archive; see “Archive and source correspondence” below.
+The archive was built directly from `HEAD:mod/factorio_autonomous_engineer` at the tested commit.
+Every archive entry was compared byte-for-byte with the corresponding Git blob; there were no
+mismatches. All engine scenarios in this report were re-run against this exact archive after it was
+installed in the isolated Factorio test profile. The later documentation-only commit does not change
+the mod tree or the archive hash.
 
 ## 1. Implemented
 
