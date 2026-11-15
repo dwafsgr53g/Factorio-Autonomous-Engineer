@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MOD_DIR = ROOT / "mod" / "factorio_autonomous_engineer"
+TEXT_SUFFIXES = {".lua", ".json", ".md", ".txt"}
 
 
 def main() -> None:
@@ -24,7 +25,12 @@ def main() -> None:
         for path in sorted(MOD_DIR.rglob("*")):
             if path.is_file():
                 archive_name = Path(archive_root) / path.relative_to(MOD_DIR)
-                archive.write(path, archive_name.as_posix())
+                data = path.read_bytes()
+                # Keep the archive byte-identical to canonical Git blobs even when a
+                # Windows checkout materialized CRLF endings. Git stores LF for text files.
+                if path.suffix.lower() in TEXT_SUFFIXES:
+                    data = data.replace(b"\r\n", b"\n")
+                archive.writestr(archive_name.as_posix(), data)
     print(f"Packaged: {args.output}")
 
 
