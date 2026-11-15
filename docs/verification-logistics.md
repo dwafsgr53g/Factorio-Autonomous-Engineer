@@ -123,10 +123,10 @@ All runs used the isolated Stage-6 profile and exited 0.
 
 | Scenario | Checks | Result | Duration |
 | --- | --- | --- | --- |
-| `s9_belt_routing.py` | 21/21 | PASS | 77 s |
-| `s10_inserters.py` | 17/17 | PASS | 128 s |
-| `s11_power_distribution.py` | 15/15 | PASS | 85 s |
-| `s12_gear_production.py` | 33/33 | PASS | 322 s |
+| `s9_belt_routing.py` | 21/21 | PASS | 76 s |
+| `s10_inserters.py` | 17/17 | PASS | 129 s |
+| `s11_power_distribution.py` | 15/15 | PASS | 84 s |
+| `s12_gear_production.py` | 35/35 | PASS | 358 s |
 | `s5_construction.py` | 50/50 | PASS | 75 s |
 | `s6_construction_persistence.py` | 44/44 | PASS | 117 s |
 | `s7_module_catalog.py` | 84/84 | PASS | 57 s |
@@ -158,16 +158,20 @@ Additional evidence:
   progress and exact item counts without duplication;
 - safety pre-emption and death both pause the task until explicit resume, which then completes the
   same chain without duplicate modules;
-- a player building placed on a not-yet-built route tile prevents success and remains intact.
+- a player building placed on a not-yet-built route tile prevents success and remains intact;
+- a real player character inside the bounded scan rectangle but outside the chain no longer
+  blocks the whole plan; the chain is built and the player is preserved (`s12` scenario I).
 
 ## Archive verification
 
-- Tested mod-tree commit: `b5f679e8038a3779c91e83f2000465b47372b4e2`
-- Tested scenario commit: `7137c46de54c4fa74b8f306ed83d9438e5410f84`
-- Documentation commit containing this report: `e78d8d2d49cfd1b6cc425c10daa095cd974f0028`
+- Final Stage-6 tested mod commit: `923cb78ee9ba2d7dcd22aca8853d9b646467c125`
+- Earlier shared Stage-3/4/5 regression mod commit: `b5f679e8038a3779c91e83f2000465b47372b4e2` (the only later
+  production change is the player-scope check in `logistics.lua`, exercised by `s12` scenario I;
+  `s5`–`s8` do not use that planner)
+- Tested scenario commit: `923cb78ee9ba2d7dcd22aca8853d9b646467c125` (includes scenario I)
 - Archive: `dist/factorio_autonomous_engineer_0.1.0.zip`
-- Archive SHA-256: `960de382cda4e6ffcfdef339007c32c39dd65731f24bbf84dc7a14851cc371bf`
-- Archive size: 86,366 bytes
+- Archive SHA-256: `f17de03ea618508e324242776a06d4b9fd204cec6926dabbafecfc4f944b20ce`
+- Archive size: 86,460 bytes
 - Entries: 21; Git mod blobs: 21; mismatches: **none**
 - Comparison: every archive entry was read byte-for-byte and compared with
   `git show HEAD:mod/factorio_autonomous_engineer/<entry>`.
