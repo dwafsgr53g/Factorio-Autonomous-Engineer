@@ -11,9 +11,11 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 ROOT = Path(__file__).resolve().parents[2]
 ENV = {
     **os.environ,
-    "FACTORIO_RCON_HOST": "127.0.0.1",
-    "FACTORIO_RCON_PORT": "27075",
-    "FACTORIO_RCON_PASSWORD_FILE": str(ROOT / ".runtime" / "rcon-password.txt"),
+    "FACTORIO_RCON_HOST": os.environ.get("FACTORIO_RCON_HOST", "127.0.0.1"),
+    "FACTORIO_RCON_PORT": os.environ.get("FACTORIO_RCON_PORT", "27075"),
+    "FACTORIO_RCON_PASSWORD_FILE": os.environ.get(
+        "FACTORIO_RCON_PASSWORD_FILE",
+        str(ROOT / ".runtime" / "rcon-password.txt")),
     "FACTORIO_TASK_POLL_INTERVAL": "1.0",
 }
 

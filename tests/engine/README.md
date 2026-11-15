@@ -53,11 +53,23 @@ scenarios never inherit each other's state.
 | `s6_construction_persistence.py` | scenario H: save/load during clearing and after a chest transfer, safety pre-emption + explicit resume, cancel, player interference, player chest withdrawal and death/respawn with construction materials |
 | `s7_module_catalog.py` | Stage 4 A–E: catalog loading and invalid-definition diagnostics, ghost-only instantiation of all modules, geometry/orientation/port/reserved-area checks, collision and resource constraints, paid module construction with recipe configuration, save/load instance identity/deduplication and construction resume |
 | `s8_layout_planner.py` | Stage 5 A–E: live iron-gear dependency chain, all mining orientations, resource-patch placement, building/player-ghost/player-work-radius avoidance, clearing requirements, deterministic fingerprints, ghost-only apply, idempotent repeated apply, save/load, cancellation/build reconciliation, stale-plan rejection and the compact MCP `plan_layout` surface |
+| `s9_belt_routing.py` | Stage 6 A: real belt routing/turns, unique tiles, engine belt connections, ore/coal on transport lines, blocked route endpoints, missing materials, cancellation and no transport-line mutation API in production |
+| `s10_inserters.py` | Stage 6 B: six inserter roles and pickup directions, real pickup/drop targets, ore/plate movement, coal consumption, full output chest back-pressure and engine-driven resume |
+| `s11_power_distribution.py` | Stage 6 C: missing power source, pole coverage, legal wire reach, preserved player wiring, real network membership and unpowered detection after supply removal |
+| `s12_gear_production.py` | Stage 6 D: full ore→plate→gear production over ticks, exact paid costs, save/load during construction/material collection/monitoring, safety/death interruption, empty coal chest and player route conflict |
 
-Run one at a time (they share port 27075):
+Run one at a time (they share RCON/game ports inside a profile). Never point two profiles at the
+same RCON port. `stop_server()` terminates only the Factorio process whose command line contains the
+selected `FACTORIO_TEST_DIR`, so a separate Stage-5 acceptance server can remain running.
 
 ```
-uv run python tests/engine/s3_death.py
+FACTORIO_TEST_DIR="$PWD/.runtime/factorio-test" FACTORIO_RCON_PASSWORD=... FACTORIO_RCON_PORT=27075 FACTORIO_GAME_PORT=34197   uv run python tests/engine/s3_death.py
+```
+
+Stage-6 targeted runs use an isolated profile and different ports:
+
+```
+FACTORIO_TEST_DIR="$PWD/.runtime/factorio-stage6" FACTORIO_RCON_PASSWORD=... FACTORIO_RCON_PORT=27076 FACTORIO_GAME_PORT=27037   uv run python tests/engine/s12_gear_production.py
 ```
 
 `harness.py` also provides construction setup helpers: `place_plan`, `create_ghost`, `cancel_ghost`, `build_ghost_as_player`, `create_chest`, `chest_contents`, `remove_chest_items`, `create_natural`, `create_player_character`, `give_items`, `fill_main_inventory`, `ghosts`, `entities_named` and `wait_task`. Direct ghost revival in `build_ghost_as_player` and direct `surface.create_entity` calls in setup are harness-only scaffolding; production construction uses paid ghost revival.
@@ -73,6 +85,13 @@ Stage-5 Layout Planner helpers: `plan_layout`, `apply_layout`, `layout_plan_stat
 `set_home`. The create/apply/status/limits operations are internal RCON operations. `set_home` is an
 administrative test/setup operation, not a model-facing MCP tool. The public projections are the
 same compact summaries returned by the `plan_layout` and `apply_layout` MCP tools.
+
+Stage-6 helpers live in `harness.py` and `stage6_fixture.py`. `stage6_fixture.prepare()` creates a
+disposable save, all research, a clear test area, a legitimate solar-powered electric network and
+an ordinary coal chest. It never places modules, belts, inserters or poles for the agent. The agent
+must build the chain through `build_logistics`. Internal RCON helpers are `layout_chain_plan`,
+`logistics_plan_create`, `logistics_plan_status`, `logistics_ghosts_place`, `logistics_verify`,
+`logistics_plans`, `task_debug` and `task_entries`; they are not model-facing tools.
 
 Human multiplayer acceptance for Stage 5 is not part of this automated suite. It must use a real
 Factorio client connected to the persistent isolated server; synthetic characters created by the

@@ -243,7 +243,7 @@ def scenario_c() -> None:
                   bool(ghosts) and ghosts[0]["position"] == {
                       "x": mining_anchor["x"] + expected_entity["x"],
                       "y": mining_anchor["y"] + expected_entity["y"]}
-                  and ghosts[0]["direction"] == (orientation // 90 * 4) % 16,
+                  and ghosts[0]["direction"] == ((orientation // 90 * 4) + 4) % 16,
                   h.pretty(ghosts))
             check(f"mining orientation {orientation} transformed output port",
                   port.get("position") == absolute_output

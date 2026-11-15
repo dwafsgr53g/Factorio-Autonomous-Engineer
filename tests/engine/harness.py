@@ -23,6 +23,10 @@ TESTDIR = Path(os.environ.get("FACTORIO_TEST_DIR", ROOT / ".runtime" / "factorio
 FACTORIO = Path(os.environ.get(
     "FACTORIO_BIN",
     r"C:\Program Files (x86)\Steam\steamapps\common\Factorio\bin\x64\factorio.exe"))
+RCON_PORT = int(os.environ.get("FACTORIO_RCON_PORT", "27075"))
+GAME_PORT = int(os.environ.get("FACTORIO_GAME_PORT", "34197"))
+
+
 def password() -> str:
     """RCON password of the local test server; never stored in the repository."""
     value = os.environ.get("FACTORIO_RCON_PASSWORD")
@@ -34,13 +38,13 @@ def password() -> str:
 SAVES = TESTDIR / "saves"
 
 __all__ = ["Bridge", "BridgeError", "TaskRunner", "bridge", "lua", "agent_lua", "lua_json",
-           "status", "password",
+           "status", "password", "RCON_PORT", "GAME_PORT",
            "wait", "start_server", "stop_server", "load_scenario_save", "save_as",
            "give_kit", "spawn_attackers", "clear_enemies", "snapshot", "pretty"]
 
 
 def bridge() -> Bridge:
-    return Bridge(password(), "127.0.0.1", 27075)
+    return Bridge(password(), "127.0.0.1", RCON_PORT)
 
 
 def lua(code: str, b: Bridge | None = None) -> str:
@@ -81,8 +85,15 @@ def wait(predicate, *, timeout: float = 120, interval: float = 0.5, what: str = 
 
 
 def stop_server() -> None:
-    subprocess.run(["powershell", "-NoProfile", "-Command",
-                    "Get-Process factorio -ErrorAction SilentlyContinue | Stop-Process -Force"],
+    # Kill only the server that belongs to this isolated runtime directory. A different
+    # Stage-5 acceptance server may legitimately be running from another profile.
+    marker = str(TESTDIR).replace("'", "''")
+    command = (
+        "Get-CimInstance Win32_Process -Filter \"Name='factorio.exe'\" | "
+        f"Where-Object {{$_.CommandLine -like '*{marker}*'}} | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+    )
+    subprocess.run(["powershell", "-NoProfile", "-Command", command],
                    capture_output=True, check=False)
     time.sleep(2)
 
@@ -95,7 +106,8 @@ def start_server(save: str, *, wait_port: float = 60) -> None:
          "--mod-directory", str(TESTDIR / "mods"),
          "--start-server", str(SAVES / save),
          "--server-settings", str(TESTDIR / "config" / "server-settings.json"),
-         "--rcon-bind", "127.0.0.1:27075", "--rcon-password", password()],
+         "--port", str(GAME_PORT),
+         "--rcon-bind", f"127.0.0.1:{RCON_PORT}", "--rcon-password", password()],
         stdout=log, stderr=subprocess.STDOUT, cwd=str(TESTDIR),
     )
     deadline = time.monotonic() + wait_port
@@ -579,6 +591,156 @@ def real_counts(b: Bridge | None = None) -> dict:
          and e.type ~= "character" then
         out[e.name] = (out[e.name] or 0) + 1
       end
+    end
+    rcon.print(helpers.table_to_json(out))
+    """
+    return lua_json(code, b) or {}
+
+
+
+
+# ---------------------------------------------------------------------------
+# Stage-6 physical logistics helpers
+# ---------------------------------------------------------------------------
+
+def layout_chain_plan(goal_item: str = "iron-gear-wheel", *, force_new: bool = True,
+                      b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("layout_plan_create", {
+        "goal_item": goal_item, "logistics_chain": True, "force_new": force_new,
+    })["result"]
+
+
+def logistics_plan_create(layout_plan_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call(
+        "logistics_plan_create", {"layout_plan_id": layout_plan_id})["result"]
+
+
+def logistics_plan_status(logistics_plan_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call(
+        "logistics_plan_status", {"logistics_plan_id": logistics_plan_id})["result"]
+
+
+def logistics_ghosts_place(logistics_plan_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call(
+        "logistics_ghosts_place", {"logistics_plan_id": logistics_plan_id})["result"]
+
+
+def logistics_verify(logistics_plan_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call(
+        "logistics_verify", {"logistics_plan_id": logistics_plan_id})["result"]
+
+
+def logistics_plans(b: Bridge | None = None) -> list:
+    return (b or bridge()).call("logistics_plans")["result"]["plans"]
+
+
+def task_debug(b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("task_debug")["result"]
+
+
+def task_entries(b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("task_entries")["result"]
+
+
+def tile_center(x: int, y: int) -> dict:
+    return {"x": x + 0.5, "y": y + 0.5}
+
+
+def create_solar_fixture(pole_x: float, pole_y: float, b: Bridge | None = None) -> dict:
+    """Harness-only fixture: a legitimate powered network from solar panels.
+
+    The scenario records this as pre-existing infrastructure; the agent does not build
+    the generator. The physics, pole connection and consumer power are still real.
+    """
+    code = f"""
+    local s = game.surfaces.nauvis
+    local result = {{ok = true}}
+    local function make(name, x, y)
+      local ok, entity = pcall(function()
+        return s.create_entity{{name=name, position={{x=x,y=y}},
+          force=game.forces.player}}
+      end)
+      if not ok or not entity or not entity.valid then
+        result.ok = false
+        result.error = tostring(entity)
+        return nil
+      end
+      return entity
+    end
+    local pole = make("medium-electric-pole", {pole_x}, {pole_y})
+    local panels = 0
+    for _, p in ipairs({{{{x={pole_x}-4,y={pole_y}}},{{x={pole_x}+4,y={pole_y}}},
+                         {{x={pole_x},y={pole_y}-4}},{{x={pole_x},y={pole_y}+4}}}}) do
+      if make("solar-panel", p.x, p.y) then panels = panels + 1 end
+    end
+    local accumulator = make("accumulator", {pole_x}-4, {pole_y}+4)
+    result.pole = pole and pole.unit_number or nil
+    result.network = pole and pole.electric_network_id or nil
+    result.panels = panels
+    result.accumulator = accumulator and accumulator.unit_number or nil
+    rcon.print(helpers.table_to_json(result))
+    """
+    return lua_json(code, b) or {"ok": False, "error": "fixture_lua_failed"}
+
+
+def electric_network_flow(pole_unit: int, b: Bridge | None = None) -> dict:
+    code = f"""
+    local out = nil
+    for _, e in pairs(game.surfaces.nauvis.find_entities_filtered{{type="electric-pole"}}) do
+      if e.unit_number == {pole_unit} then
+        local net = e.electric_network
+        local parent = net and net.parent_network
+        out = {{network_id=e.electric_network_id,
+          flow=parent and parent.flow_last_tick or nil,
+          connections=e.get_wire_connectors and #e.get_wire_connectors(false) or nil}}
+      end
+    end
+    rcon.print(helpers.table_to_json(out))
+    """
+    return lua_json(code, b) or {}
+
+
+def transport_line_contents(x: float, y: float, b: Bridge | None = None) -> dict:
+    code = f"""
+    local out = nil
+    for _, e in pairs(game.surfaces.nauvis.find_entities_filtered{{
+        area={{{{x={x}-0.6,y={y}-0.6}},{{x={x}+0.6,y={y}+0.6}}}},
+        type="transport-belt"}}) do
+      if e.valid then
+        local line = e.get_transport_line(1)
+        out = line and line.get_contents() or {{}}
+      end
+    end
+    out = out or {{}}
+    rcon.print(helpers.table_to_json(out))
+    """
+    return lua_json(code, b) or {}
+
+
+def belt_entities(b: Bridge | None = None, radius: int = 64) -> list:
+    code = f"""
+    local a = remote.call("factorio_autonomous_engineer","get_agent")
+    local out = {{}}
+    for _, e in pairs(a.surface.find_entities_filtered{{
+        area={{{{a.position.x-{radius},a.position.y-{radius}}},
+               {{a.position.x+{radius},a.position.y+{radius}}}}},
+        type="transport-belt"}}) do
+      out[#out+1] = {{unit=e.unit_number, name=e.name,
+        position=e.position, direction=e.direction, shape=e.belt_shape,
+        neighbours=e.belt_neighbours}}
+    end
+    table.sort(out, function(a,b) return a.unit < b.unit end)
+    rcon.print(helpers.table_to_json(out))
+    """
+    return lua_json(code, b) or []
+
+
+def machine_contents(name: str, inventory: str, b: Bridge | None = None) -> dict:
+    code = f"""
+    local out = {{}}
+    for _, e in pairs(game.surfaces.nauvis.find_entities_filtered{{name={json.dumps(name)}}}) do
+      local inv = e.get_inventory(defines.inventory[{json.dumps(inventory)}])
+      out[e.unit_number] = inv and inv.get_contents() or {{}}
     end
     rcon.print(helpers.table_to_json(out))
     """
