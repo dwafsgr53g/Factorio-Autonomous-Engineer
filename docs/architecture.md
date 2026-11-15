@@ -96,11 +96,35 @@ directions, belt neighbours, inserter power, pole network membership, furnace fu
 production. It observes `crafter_input`/`crafter_output`, the output chest and live ticks; module
 or belt existence alone is never success.
 
-`LuaTransportLine` is not used to move items. Production code performs no transport-line
-mutation, machine-inventory writes, crafting-progress writes, energy fabrication or wire-reach
-bypass. Poles auto-connect through the engine inside their live wire reach; the planner never
-disconnects player wiring. The task ghost filter restricts construction to the composite task's
-own module and logistics ghosts. See [logistics.md](logistics.md).
+`LuaTransportLine` is never used to move items. Stage 7 adds read-only
+`get_transport_line()` sampling for flow diagnostics, but production code performs no
+transport-line mutation, machine-inventory writes, crafting-progress writes, energy
+fabrication or wire-reach bypass. Poles auto-connect through the engine inside their live wire
+reach; the planner never disconnects player wiring. The task ghost filter restricts
+construction to the composite task's own module and logistics ghosts. See
+[logistics.md](logistics.md) and [advanced-logistics.md](advanced-logistics.md).
+
+## Stage 7: directed physical transport graph
+
+Stage 7 keeps the Stage-5 module format, Stage-6 plan format and Stage-3 paid executor. The
+physical logistics plan becomes a directed graph with:
+
+- `connections[]` routes carrying source/destination module and port IDs, ordered steps,
+  fingerprints, ghosts, built units, engine connectivity, observed flow and status;
+- `junctions[]` splitter records with real direction, two-tile geometry and used/unused
+  input/output connectors;
+- `underground_pairs[]` records with entrance/exit tiles, live prototype reach, pair identity
+  and reciprocal runtime neighbours;
+- per-consumer/per-machine observation including `products_finished` baselines.
+
+`lib/transport.lua` owns deterministic splitter/underground geometry, route steps and
+read-only verification. The layout planner's internal `multi_consumer` mode places two
+furnaces and two assemblers around one miner and persists the same module/plan records.
+Junctions distribute and merge real item flows; the task does not assume equal balancing or
+throughput. A route is connected only after engine verification and operational only after
+both consumers are supplied and real production/output are observed. Player-owned transport
+infrastructure is never replaced; removed real routes and cancelled ghosts are reported, not
+rebuilt. See [advanced-logistics.md](advanced-logistics.md).
 
 ## Shared-world collaboration
 

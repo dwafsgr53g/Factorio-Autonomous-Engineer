@@ -142,3 +142,38 @@ infrastructure are explicit unresolved dependencies unless an existing network i
 construction, clearing and material transfer remain the existing `assist_construction` executor.
 
 See [layout-planner.md](layout-planner.md).
+
+## Advanced physical logistics (Stage 7)
+
+`execute_task(task="build_logistics", goal_item=..., mode="multi_consumer")` selects the
+multi-consumer composite path. `mode` defaults to `"linear_chain"`, preserving Stage 6.
+
+The task:
+
+1. creates or reuses a `multi_consumer` layout plan;
+2. plans all routes, splitters, the underground pair and power/fuel distribution;
+3. checks real occupancy, player work areas and existing player infrastructure;
+4. calculates the complete paid material set;
+5. fetches missing materials through the ordinary-chest path;
+6. creates ordinary ghosts for modules, belts, splitters, underground endpoints, inserters,
+   poles and the common output chest;
+7. builds them through the same paid executor as Stage 6;
+8. verifies engine connectivity for every route, splitter and underground pair;
+9. monitors actual ore/coal/plate flow, both furnaces, both assemblers, `products_finished`
+   and the common output chest;
+10. succeeds only after both consumers are supplied and real gear wheels reach the output.
+
+Internal-only task parameters `plan_id` and `logistics_plan_id` allow the engine harness (and
+a resumed internal run) to pin an already planned cell. They are not exposed by the MCP
+`execute_task` schema.
+
+The terminal result contains `mode`, `routes_connected`/`routes_blocked`, junction and
+underground counts, `consumers` by ore/fuel/plate/gear, `consumers_supplied`,
+`production_active`, `output_verified`, `power_status`, `fuel_status`, gear count,
+per-machine production flags, missing materials and `further_work_possible`. It contains no
+coordinates, entity indices or per-belt instructions.
+
+Save/load during splitter/underground construction, production monitoring, cancellation,
+safety interruption and death uses the same task checkpoint. A built plan is never rebuilt
+silently: player-removed real entities and player-cancelled ghosts produce a blocked result.
+See [advanced-logistics.md](advanced-logistics.md).

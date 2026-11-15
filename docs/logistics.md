@@ -3,6 +3,10 @@
 Status: **IMPLEMENTED**, **UNIT TESTED**, **AUTOMATED ENGINE TESTED** on Factorio 2.1.24.
 Human multiplayer acceptance is a separate gate and is not implied by the automated results.
 
+Stage 7 extends this document with splitters, underground belts and multi-consumer graphs;
+see [advanced-logistics.md](advanced-logistics.md). The Stage-6 linear chain remains the
+default `mode="linear_chain"` and its behaviour is unchanged.
+
 Stage 6 turns the logical item connections of a Stage-5 layout plan into real Factorio
 infrastructure. The model-facing objective is one composite task:
 
@@ -45,6 +49,7 @@ infrastructure. The agent does not build generators and does not mine coal in th
 | `mod/factorio_autonomous_engineer/lib/construction.lua` | Exact-position real-entity reconciliation and an approach point that is guaranteed outside the target footprint. |
 | `src/factorio_autonomous_engineer/logistics.py` | Python reference for deterministic A*, turns and gap/endpoint arithmetic. |
 | `tests/test_logistics.py` | Fast unit tests for the reference implementation. |
+| `mod/factorio_autonomous_engineer/lib/transport.lua` | Stage-7 splitter geometry, underground pairing, deterministic route steps and read-only transport verification. |
 
 The mining module was corrected in Stage 6: `nauvis.electric_mining.iron` now gives the drill
 entity direction east (`4`). The Stage-4 definition declared an east `ore_output` port but pointed
@@ -296,3 +301,25 @@ Stage-6 engine runs set `game.speed = 60` (test-only) and use short, phase-speci
 Scenarios that need to observe an intermediate state temporarily set speed 1–5, then restore 60
 for completion. Results are recorded in [engine-test-plan.md](engine-test-plan.md) and
 [verification-logistics.md](verification-logistics.md).
+
+
+## 13. Stage 7 extension
+
+Stage 7 preserves the Stage-6 plan/ghost/payment format and adds a directed transport graph:
+
+- `mode="multi_consumer"` places two furnaces and two gear assemblers around one miner;
+- splitters provide one-to-two distribution and two-to-one merging;
+- one ordinary underground-belt pair passes under a real belt crossing;
+- one coal chest feeds both furnaces through a splitter;
+- both furnace outputs merge, then split to both assemblers;
+- both gear outputs merge into one common output chest.
+
+The physical plan records routes, junctions and underground pairs separately, and every
+route has planned, ghost, engine-connected, flow-observed and consumer-supplied stages.
+A route is not operational because endpoints exist. The task succeeds only after real
+machine production and a real output-chest gain.
+
+The construction executor reasserts underground travel direction after revival because the
+engine initially revives an endpoint as an input. This is documented in
+[advanced-logistics.md](advanced-logistics.md). Existing player belts, splitters,
+underground endpoints and ghosts are never replaced or rebuilt.

@@ -117,3 +117,17 @@ ghost requirement and performs all material checks.
   unavailable until the listed technologies are researched.
 
 See the recorded engine results in [verification-modules.md](verification-modules.md).
+
+## Stage-7 multi-consumer composition
+
+Stage 7 adds no new module definitions. The internal layout mode `multi_consumer` composes the
+existing Nauvis starter modules:
+
+- one `nauvis.electric_mining.iron`;
+- two `nauvis.stone_furnace.iron_smelting` instances (one unit each);
+- two `nauvis.assembling_machine_1.gear` instances.
+
+The module format, rotation/parameter expansion, reserved areas and paid ghost construction are
+unchanged. The multi-consumer planner places these instances at explicit relative anchors so the
+splitter/inserter/belt geometry is deterministic. It does not create a second module or
+construction format.

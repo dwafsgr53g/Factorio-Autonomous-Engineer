@@ -169,3 +169,91 @@ Stage 6. This exception is valid only while the changed-file analysis above rema
 ## Pass criteria
 
 Do not promote the mod beyond development status until all relevant checks pass on the actual Factorio 2.1.24 executable and the user's enabled mod set. Record the save copy, mod list, Factorio build, test actions, RCON logs, event payloads and before/after inventory counts.
+
+## 10. Advanced logistics (Stage 7)
+
+Run in the isolated Stage-7 profile (`FACTORIO_TEST_DIR=.../factorio-stage7-test`,
+`FACTORIO_RCON_PORT=27078`, `FACTORIO_GAME_PORT=27039`). Use the clean
+`saves/s7-baseline.zip` generated from the same 2.1.24 executable and mod set. The Stage-5
+and Stage-6 worlds are not used by these automated scenarios.
+
+Scenario prerequisites (`tests/engine/stage7_fixture.py`):
+
+- all research on the disposable force;
+- a cleared bounded test area around a real iron patch and a home point;
+- a legitimate solar-powered network near the cell;
+- an ordinary wooden chest containing 100 coal at the cell's relative coal position;
+- optional construction materials in the agent inventory or an ordinary chest.
+
+Prerequisites never create the agent's modules, belts, splitters, underground belts,
+inserters, poles or output chest.
+
+Scenarios:
+
+- `s13_splitter_networks.py`
+  - one-to-two splitter distribution to both furnaces;
+  - two-to-one plate and gear merging;
+  - real splitter type/direction and used/unused connector verification;
+  - both consumers supplied and common output produced;
+  - player building on a branch blocks the plan and is preserved;
+  - a full output chest causes back-pressure and never a success result;
+  - an empty coal chest reports depleted fuel and no fabricated production;
+  - no transport-line mutation API in production code.
+- `s14_underground_belts.py`
+  - live yellow-belt `max_underground_distance = 5`;
+  - minimum distance 1 and maximum distance 5 accepted, 6 rejected;
+  - north/east splitter footprint and connector geometry;
+  - distance-one real pair reciprocal neighbours;
+  - paid construction of the expansion pair with input/output roles and travel direction;
+  - coal physically crosses the pair to the second furnace;
+  - a player-owned belt at the planned exit blocks the plan and is preserved.
+- `s15_multi_consumer_expansion.py`
+  - Stage-6 linear chain is built first and snapshotted;
+  - Stage-7 multi-consumer cell is planned beside it on the same ore area;
+  - both cells operate; old unit numbers/positions/directions are unchanged;
+  - Stage-6 output chest keeps its production and the old factory still verifies entities
+    and power;
+  - all 14 Stage-7 routes, five splitters and one underground pair are connected;
+  - both furnaces, both assemblers and the common output are verified.
+- `s16_factory_persistence.py`
+  - save/load during splitter and underground construction;
+  - save/load during multi-consumer production monitoring;
+  - repeated execution with no duplicate entities;
+  - cancellation followed by a clean restart;
+  - player-removed route is reported and not silently rebuilt;
+  - safety pre-emption and explicit resume;
+  - death, respawn and explicit resume;
+  - exact paid entity counts and no duplicated materials.
+
+Speed policy:
+
+- routine construction/production scenarios use `game.speed = 60`;
+- save/load windows, cancellation, safety and death run at `game.speed = 1..5` and restore
+  60 after the timed window;
+- human multiplayer uses `game.speed = 1` and is restored before acceptance.
+
+Impact-based selection for Stage 7:
+
+| Changed component | Selected scenarios |
+| --- | --- |
+| `lib/transport.lua` splitter/underground geometry | `s13`, `s14`, Stage-7 suite |
+| route graph/status and `lib/logistics.lua` expansion planning | `s13`, `s15`, `s16`, `s9` |
+| layout planner `multi_consumer` mode and site search | `s15`, `s16`, `s8` |
+| `module_placer` stale-instance recovery | `s7`, `s8`, Stage-7 suite |
+| paid construction underground post-build direction | `s14`, `s16`, `s5`, `s6` |
+| composite task phases/result contract | `s13`, `s15`, `s16`, `s12` |
+| MCP `execute_task(mode=...)` and docs | fast checks plus `s15` |
+
+Directly affected historical regressions selected: `s5`, `s6`, `s7`, `s8`, `s9`, `s10`,
+`s12`.
+
+Not selected and reasons:
+
+- `s1`, `s2`, `s3`, `s3b` — gather/lifecycle/safety controller internals were not changed;
+  Stage-7 safety/death checkpoint behaviour is covered by `s16 F/G`.
+- `s4`, `s4b` — RCON/MCP transport and restart code were not changed. Stage-7 MCP smoke is
+  covered by the existing `s15` task path and fast tests.
+- Full historical suite — the impact matrix above identifies the affected contracts; running
+  every old scenario would not exercise a changed interface.
+
+A skipped scenario is never recorded as PASS.
