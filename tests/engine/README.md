@@ -56,7 +56,7 @@ scenarios never inherit each other's state.
 | `s9_belt_routing.py` | Stage 6 A: real belt routing/turns, unique tiles, engine belt connections, ore/coal on transport lines, blocked route endpoints, missing materials, cancellation and no transport-line mutation API in production |
 | `s10_inserters.py` | Stage 6 B: six inserter roles and pickup directions, real pickup/drop targets, ore/plate movement, coal consumption, full output chest back-pressure and engine-driven resume |
 | `s11_power_distribution.py` | Stage 6 C: missing power source, pole coverage, legal wire reach, preserved player wiring, real network membership and unpowered detection after supply removal |
-| `s12_gear_production.py` | Stage 6 D: full ore→plate→gear production over ticks, exact paid costs, save/load during construction/material collection/monitoring, safety/death interruption, empty coal chest and player route conflict |
+| `s12_gear_production.py` | Stage 6 D: full ore→plate→gear production over ticks, exact paid costs, save/load during construction/material collection/monitoring, safety/death interruption, empty coal chest, player route conflict, distant-player planning, one-trip batch material acquisition, walk-out from a pending ghost and walk-off a working belt |
 
 Run one at a time (they share RCON/game ports inside a profile). Never point two profiles at the
 same RCON port. `stop_server()` terminates only the Factorio process whose command line contains the
@@ -66,10 +66,10 @@ selected `FACTORIO_TEST_DIR`, so a separate Stage-5 acceptance server can remain
 FACTORIO_TEST_DIR="$PWD/.runtime/factorio-test" FACTORIO_RCON_PASSWORD=... FACTORIO_RCON_PORT=27075 FACTORIO_GAME_PORT=34197   uv run python tests/engine/s3_death.py
 ```
 
-Stage-6 targeted runs use an isolated profile and different ports:
+Stage-6 targeted runs use an isolated profile different ports, and `game.speed=60` for speed:
 
 ```
-FACTORIO_TEST_DIR="$PWD/.runtime/factorio-stage6" FACTORIO_RCON_PASSWORD=... FACTORIO_RCON_PORT=27076 FACTORIO_GAME_PORT=27037   uv run python tests/engine/s12_gear_production.py
+FACTORIO_TEST_DIR="$PWD/.runtime/factorio-stage6" FACTORIO_RCON_PASSWORD=... FACTORIO_RCON_PORT=27076 FACTORIO_GAME_PORT=27037 FACTORIO_GAME_SPEED=60   uv run python tests/engine/s12_gear_production.py
 ```
 
 `harness.py` also provides construction setup helpers: `place_plan`, `create_ghost`, `cancel_ghost`, `build_ghost_as_player`, `create_chest`, `chest_contents`, `remove_chest_items`, `create_natural`, `create_player_character`, `give_items`, `fill_main_inventory`, `ghosts`, `entities_named` and `wait_task`. Direct ghost revival in `build_ghost_as_player` and direct `surface.create_entity` calls in setup are harness-only scaffolding; production construction uses paid ghost revival.
