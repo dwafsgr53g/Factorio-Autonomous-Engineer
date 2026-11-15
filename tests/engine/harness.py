@@ -519,6 +519,72 @@ def module_instances(b: Bridge | None = None) -> list:
     return (b or bridge()).call("module_instances")["result"]["instances"]
 
 
+# ---------------------------------------------------------------------------
+# Stage-5 Layout Planner helpers (internal RCON surface and public projection)
+# ---------------------------------------------------------------------------
+
+def set_home(position: dict, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("set_home", {
+        "surface": "nauvis", "position": position})["result"]
+
+
+def plan_layout(goal_item: str, *, force_new: bool = False,
+                orientation_hints: dict | None = None,
+                b: Bridge | None = None) -> dict:
+    params: dict = {"goal_item": goal_item}
+    if force_new:
+        params["force_new"] = True
+    if orientation_hints:
+        params["orientation_hints"] = orientation_hints
+    return (b or bridge()).call("layout_plan_create", params)["result"]
+
+
+def apply_layout(plan_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("layout_plan_apply", {"plan_id": plan_id})["result"]
+
+
+def layout_plan_status(plan_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("layout_plan_status", {"plan_id": plan_id})["result"]
+
+
+def layout_plans(b: Bridge | None = None) -> list:
+    return (b or bridge()).call("layout_plans")["result"]["plans"]
+
+
+def plan_layout_public(goal_item: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("plan_layout", {"goal_item": goal_item})["result"]
+
+
+def apply_layout_public(plan_id: str, b: Bridge | None = None) -> dict:
+    return (b or bridge()).call("apply_layout", {"plan_id": plan_id})["result"]
+
+
+def ghost_tags(b: Bridge | None = None) -> list:
+    code = """
+    local out = {}
+    for _, g in pairs(game.surfaces.nauvis.find_entities_filtered{type="entity-ghost"}) do
+      out[#out+1] = {unit=g.unit_number, name=g.ghost_name, tags=g.tags}
+    end
+    table.sort(out, function(a,b) return a.unit < b.unit end)
+    rcon.print(helpers.table_to_json(out))
+    """
+    return lua_json(code, b) or []
+
+
+def real_counts(b: Bridge | None = None) -> dict:
+    code = """
+    local out = {}
+    for _, e in pairs(game.surfaces.nauvis.find_entities_filtered{}) do
+      if e.valid and e.type ~= "entity-ghost" and e.type ~= "resource"
+         and e.type ~= "character" then
+        out[e.name] = (out[e.name] or 0) + 1
+      end
+    end
+    rcon.print(helpers.table_to_json(out))
+    """
+    return lua_json(code, b) or {}
+
+
 def research_all(b: Bridge | None = None) -> None:
     '''Test scaffolding: unlock prototypes on the disposable scenario force.'''
     lua('game.forces.player.research_all_technologies()', b)

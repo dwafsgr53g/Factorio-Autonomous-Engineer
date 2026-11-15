@@ -37,6 +37,12 @@ async def main(mode: str, payload: str) -> int:
                 args = json.loads(payload)
                 result = await session.call_tool("execute_task", args)
                 print(result.content[0].text if result.content else "<no content>")
+            elif mode == "plan_layout":
+                result = await session.call_tool("plan_layout", {"goal_item": payload})
+                print(result.content[0].text if result.content else "<no content>")
+            elif mode == "apply_layout":
+                result = await session.call_tool("apply_layout", {"plan_id": payload})
+                print(result.content[0].text if result.content else "<no content>")
             else:
                 raise SystemExit(f"unknown mode {mode}")
     return 0
