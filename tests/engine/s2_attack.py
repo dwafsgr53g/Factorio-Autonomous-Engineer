@@ -24,6 +24,16 @@ async def scenario() -> int:
     print("phase before attack:", h.status(b)["task"].get("phase"),
           "| collected:", h.status(b)["task"].get("collected"))
 
+    await asyncio.to_thread(h.lua, "game.speed = 5", b)
+    await asyncio.to_thread(
+        h.lua,
+        "storage.ae_armed_firing_seen = false\n"
+        "script.on_event(defines.events.on_tick, function()\n"
+        "  local a = remote.call('factorio_autonomous_engineer', 'get_agent')\n"
+        "  if a and a.valid and a.shooting_state.state == 1 then\n"
+        "    storage.ae_armed_firing_seen = true\n"
+        "  end\n"
+        "end)", b)
     print("attackers:", await asyncio.to_thread(h.spawn_attackers, 3, 8.0, b))
     result = await asyncio.wait_for(execute, timeout=120)
     print("runner result:", h.pretty(result)[:420])
@@ -33,7 +43,8 @@ async def scenario() -> int:
     print("safety:", h.pretty(safety))
     print("task:", h.pretty(task))
     firing = h.agent_lua("return a.shooting_state.state", b)
-    print("shooting_state (armed):", firing)
+    firing_observed = h.lua("rcon.print(tostring(storage.ae_armed_firing_seen == true))", b)
+    print("shooting_state (armed):", firing, "| firing observed during attack:", firing_observed)
     events = b.call("agent_events", {"limit": 10, "after_id": 0})["result"]["events"]
     print("events:", h.pretty(events)[:700])
 
@@ -50,6 +61,7 @@ async def scenario() -> int:
     resolved = [e for e in events if e["type"] == "emergency_resolved"]
     print("emergency_resolved:", h.pretty(resolved)[:300])
 
+    await asyncio.to_thread(h.lua, "game.speed = 60", b)
     print("resume:", h.pretty(b.call("task_resume", {"task_id": task["task_id"]})["result"]))
     final = await asyncio.to_thread(
         h.wait,
@@ -59,6 +71,7 @@ async def scenario() -> int:
     print("final task:", h.pretty(final))
 
     # Second attack without ammunition: must not shoot.
+    await asyncio.to_thread(h.lua, "game.speed = 5", b)
     h.agent_lua('a.get_inventory(defines.inventory.character_ammo).clear() return ""', b)
     await asyncio.to_thread(h.spawn_attackers, 1, 6.0, b)
     await asyncio.sleep(3)
@@ -81,7 +94,7 @@ async def scenario() -> int:
                             timeout=180, what="third emergency resolved")
 
     ok = (preempted and resolved and final.get("status") == "succeeded"
-          and firing == "1" and unarmed_fire == "0" and low_health_fire == "0")
+          and firing_observed == "true" and unarmed_fire == "0" and low_health_fire == "0")
     print("RESULT", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

@@ -64,8 +64,9 @@ The composite task owns the complete physical production-chain cycle:
    ghosts are built. Exact costs are paid from real inventory or ordinary chests; revival remains
    the only real-building path. The composite task aggregates all pending ghost costs and fetches
    the whole available shortfall in one chest trip (`acquisition_trips`), while payment remains
-   per ghost. It also walks out of any pending ghost footprint or off a working belt before
-   continuing (`step_out_count`, `belt_step_offs`, bounded `step_out_teleports`).
+   per ghost. Movement recovery preserves the original target and walks out of an obstructing
+   module footprint or off a belt only for a direction conflict/undesired displacement; aligned
+   belt travel is allowed (`step_out_count`, `belt_step_offs`, `step_out_teleports = 0`).
 5. Retry a bounded number of pending ghosts after path/approach failures. Save/load resets in-flight
    `building` entries to `pending` and resumes without duplicating completed builds.
 6. Verify, read-only, that belts are physically connected, inserters are powered, poles belong to a
@@ -98,6 +99,20 @@ missing-material map. No coordinates, paths, entity handles or wire identifiers 
 - Safety pre-emption has unconditional priority. Completed ledger entries survive; in-flight targets are reset only on explicit resume.
 - Save/load preserves the ledger, counters, chest transfers and in-flight target. A lost path request is retried a bounded number of times.
 - The MCP surface remains one high-level `assist_construction` objective, not a per-building control API.
+
+## Deadline model
+
+Deadlines use game ticks and persist in the Factorio save. `build_logistics` allows 108,000 ticks
+(30 game minutes) for a construction attempt, starting after planning/ghost placement. At most two
+automatic construction retries are allowed, so retries cannot extend a task indefinitely; the full
+deadline is not reset on ordinary phase transitions. Verification has separate bounded settle,
+fuel and production-monitoring windows inside the task budget. An explicit strategic resume starts
+a fresh bounded attempt; save/load alone does not reset it.
+
+Movement/path waiting and construction execution both consume this in-game budget. The Python
+`TaskRunner` wall-clock timeout is a separate transport/caller safeguard and is not added to the
+Factorio deadline. Stage 7.1 keeps the existing logistics budget: sequential deadline failures were
+caused by repeated recovery/path-request churn, not by legitimate work volume.
 
 ## Internal module instantiation
 

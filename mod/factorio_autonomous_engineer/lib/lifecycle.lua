@@ -1,3 +1,5 @@
+local movement = require("lib.movement")
+
 local M = {}
 local RECOVERY_SLOTS, RESPAWN_DELAY, HOME_DANGER_RADIUS = 200, 180, 48
 local CORPSE_RADIUS, CORPSE_CAPTURE_TICKS = 3, 600
@@ -190,6 +192,7 @@ local function spawn(s, reason)
     s.safety.reason = "respawned"
     s.safety.path, s.safety.path_request = nil, nil
     s.safety.destination, s.safety.destination_kind = nil, nil
+    s.safety.movement_request = nil
   end
   s.lifecycle = s.lifecycle or {}
   s.lifecycle.status, s.lifecycle.respawn_at = "alive", nil
@@ -297,12 +300,15 @@ function M.tick(s)
     s.safety.active, s.safety.status, s.safety.reason = true, "respawning", "agent_lost"
     s.safety.started_tick = s.safety.started_tick or game.tick
     s.safety.destination, s.safety.path, s.safety.path_request = nil, nil, nil
+    s.safety.movement_request = nil
+    movement.on_agent_died(s)
     if s.task and s.task.status == "running" then
       s.task.status, s.task.pause_reason = "paused", "death"
       s.task.phase, s.task.target, s.task.path = "search", nil, nil
       s.task.target_kind, s.task.target_entry = nil, nil
       s.task.target_ghost, s.task.target_obstacle, s.task.target_chest = nil, nil, nil
       s.task.approach, s.task.path_request, s.task.path_index = nil, nil, nil
+      s.task.movement_request = nil
     end
     append_event(s, "agent_lost", {reason = "entity_removed_without_death_event"})
   end

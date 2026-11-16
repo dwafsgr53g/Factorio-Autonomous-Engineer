@@ -3,6 +3,8 @@ local collaboration = require("lib.collaboration")
 local clearing = require("lib.clearing")
 local layout_planner = require("lib.layout_planner")
 local logistics = require("lib.logistics")
+local movement = require("lib.movement")
+local work_scheduler = require("lib.work_scheduler")
 
 local M = {}
 
@@ -19,6 +21,7 @@ local MOVE_TIMEOUT_TICKS = 60 * 180
 local LOGISTICS_DEADLINE_TICKS = 60 * 60 * 30
 local LOGISTICS_CONSTRUCTION_RETRIES = 2
 local LOGISTICS_SETTLE_TICKS = 60 * 5
+local LOGISTICS_FUEL_GRACE_TICKS = 60 * 30
 local LOGISTICS_MONITOR_TICKS = 60 * 180
 local LOGISTICS_MULTI_MONITOR_TICKS = 60 * 300
 
@@ -36,46 +39,52 @@ local function entity_key(entity)
   return entity.name .. ":" .. tostring(entity.position.x) .. ":" .. tostring(entity.position.y)
 end
 
-local function stop_character(agent)
-  if not agent or not agent.valid then return end
-  agent.walking_state = {walking = false, direction = defines.direction.north}
-  agent.mining_state = {mining = false}
+-- Stop ordinary locomotion through the single movement owner. Only
+-- lib/movement.lua writes walking_state; this helper additionally clears the
+-- mining state, which is not movement.
+local function stop_character(s)
+  local agent = s.agent
+  if agent and agent.valid then agent.mining_state = {mining = false} end
+  movement.stop(s)
+end
+
+-- The movement controller owns path requests and waypoint following. Tasks only
+-- submit intents and observe movement.status.
+local function begin_move(s, task, destination, kind, options)
+  options = options or {}
+  local id, reason = movement.request(s, {
+    owner = task.id, purpose = kind or "task",
+    destination = destination, entity_unit = options.entity_unit,
+    arrival_tolerance = options.arrival_tolerance or task.move_tolerance,
+  })
+  if not id then
+    movement.cancel(s, task.movement_request)
+    task.movement_request = nil
+    return false, reason or "move_request_failed"
+  end
+  task.movement_request = id
+  task.movement_kind = kind
+  return true
+end
+
+local function move_status(s, task)
+  if not task.movement_request then return nil end
+  local status = movement.status(s, task.movement_request)
+  if status.state == "cancelled" or status.state == "blocked" then
+    task.movement_request = nil
+  end
+  return status
 end
 
 local function inventory_count(agent, item)
   return agent.get_main_inventory().get_item_count(item)
 end
 
-local function request_path(agent, goal)
-  if not agent or not agent.valid or not goal then return nil end
-  local ok, request_id = pcall(function()
-    return agent.surface.request_path{
-      bounding_box = agent.prototype.collision_box,
-      collision_mask = agent.prototype.collision_mask,
-      start = agent.position, goal = goal, force = agent.force, radius = 1,
-      entity_to_ignore = agent, pathfind_flags = {prefer_straight_paths = true},
-    }
-  end)
-  if ok then return request_id end
-  return nil
-end
-
-local function follow_path(agent, task)
-  local waypoint = task.path and task.path[task.path_index]
-  if not waypoint then return true end
-  if distance(agent.position, waypoint.position) < 0.45 then
-    task.path_index = task.path_index + 1
-    waypoint = task.path[task.path_index]
-  end
-  if not waypoint then return true end
-  local angle = math.atan2(waypoint.position.x - agent.position.x,
-    agent.position.y - waypoint.position.y)
-  local direction = (math.floor(angle / (math.pi / 4) + 0.5) * 2) % 16
-  agent.walking_state = {walking = true, direction = direction}
-  return false
-end
 
 local function clear_target(task)
+  -- A resolved target invalidates the current zone position: the scheduler must
+  -- choose a fresh floating working position for whatever work remains.
+  task.active_zone, task.zone_selection = nil, nil
   task.target_kind, task.target_entry = nil, nil
   task.target_ghost, task.target_obstacle, task.target_chest = nil, nil, nil
   task.missing_for_target = nil
@@ -83,7 +92,21 @@ local function clear_target(task)
   task.belt_walk_until, task.belt_walk_direction = nil, nil
   task.escape_until, task.escape_direction = nil, nil
   task.escape_kind, task.escape_attempts = nil, nil
+  task.movement_request, task.movement_kind = nil, nil
   task.phase, task.phase_started_tick = "search", game.tick
+end
+
+-- The movement controller owns recovery. Report its per-task delta rather than
+-- relying on the task to observe every transition (an automatic belt/ghost
+-- recovery can complete entirely between two task ticks).
+local function recovery_counters(s, task)
+  local stats = movement.stats(s) or {}
+  local base = task.movement_stats_base or {}
+  local belt = (stats.belt_recoveries or 0) - (base.belt_recoveries or 0)
+  local ghost = (stats.ghost_recoveries or 0) - (base.ghost_recoveries or 0)
+  if belt < 0 then belt = 0 end
+  if ghost < 0 then ghost = 0 end
+  return belt, ghost
 end
 
 ----------------------------------------------------------------------------
@@ -93,7 +116,7 @@ end
 local function finish_gather(s, status, reason)
   local task = s.task
   if not task then return end
-  stop_character(s.agent)
+  stop_character(s)
   task.status, task.reason, task.finished_tick = status, reason, game.tick
   task.result = {
     success = status == "succeeded", status = status,
@@ -119,8 +142,9 @@ local function search_target(s, task)
       if approach then
         task.target, task.approach = resource, approach
         task.phase, task.phase_started_tick = "pathing", game.tick
-        local request_id = request_path(agent, approach)
-        if request_id then task.path_request = request_id return true end
+        local ok, reason = begin_move(s, task, approach, "resource",
+          {arrival_tolerance = 1.5})
+        if ok then return true end
       end
       task.visited[key] = true
       task.target, task.approach = nil, nil
@@ -142,22 +166,32 @@ local function tick_gather(s, task, agent)
     finish_gather(s, "failed", "task_deadline_exceeded")
     return
   end
-  if task.phase == "pathing" and game.tick - (task.phase_started_tick or game.tick) > PATH_TIMEOUT_TICKS then
+  local movement_status = move_status(s, task)
+  if task.phase == "pathing" and (not movement_status
+    or movement_status.state == "blocked"
+    or (movement_status.state == "cancelled")) then
     if task.target and task.target.valid then task.visited[entity_key(task.target)] = true end
     task.target, task.path, task.path_request = nil, nil, nil
     task.phase, task.phase_started_tick = "search", game.tick
     return
   end
-  if task.phase == "moving" and game.tick - (task.phase_started_tick or game.tick) > MOVE_TIMEOUT_TICKS then
+  if task.phase == "pathing" and movement_status
+    and (movement_status.state == "arrived" or movement_status.state == "following_path") then
+    task.phase, task.phase_started_tick = "moving", game.tick
+    return
+  end
+  if task.phase == "moving" and (not movement_status
+    or movement_status.state == "blocked"
+    or movement_status.state == "cancelled") then
     if task.target and task.target.valid then task.visited[entity_key(task.target)] = true end
-    stop_character(agent)
+    stop_character(s)
     task.target, task.path, task.path_request = nil, nil, nil
     task.phase, task.phase_started_tick = "search", game.tick
     return
   end
   if game.tick - task.last_progress_tick > 60 * 45 and task.phase == "mining" then
     if task.target and task.target.valid then task.visited[entity_key(task.target)] = true end
-    stop_character(agent)
+    stop_character(s)
     task.target, task.phase = nil, "search"
     task.phase_started_tick = game.tick
   end
@@ -165,10 +199,10 @@ local function tick_gather(s, task, agent)
     search_target(s, task)
   elseif task.phase == "moving" then
     if not task.target or not task.target.valid then task.phase, task.target = "search", nil return end
-    local arrived = follow_path(agent, task)
-    local arrival_tolerance = task.type == "build_logistics" and 0.55 or 1.5
-    if arrived or distance(agent.position, task.approach) <= arrival_tolerance then
-      stop_character(agent)
+    local arrived = movement_status and movement_status.state == "arrived"
+    local close_enough = distance(agent.position, task.approach) <= 1.5
+    if arrived or close_enough then
+      stop_character(s)
       if agent.can_reach_entity(task.target) then
         task.deposits_used = task.deposits_used + 1
         task.phase, task.phase_started_tick = "mining", game.tick
@@ -181,7 +215,7 @@ local function tick_gather(s, task, agent)
     end
   elseif task.phase == "mining" then
     if not task.target or not task.target.valid or task.target.amount <= 0 then
-      stop_character(agent)
+      stop_character(s)
       task.target, task.phase = nil, "search"
       task.phase_started_tick = game.tick
     elseif agent.can_reach_entity(task.target) then
@@ -189,7 +223,7 @@ local function tick_gather(s, task, agent)
       agent.mining_state = {mining = true, position = task.target.position}
     else
       task.visited[entity_key(task.target)] = true
-      stop_character(agent)
+      stop_character(s)
       task.target, task.phase = nil, "search"
       task.phase_started_tick = game.tick
     end
@@ -201,7 +235,8 @@ end
 ----------------------------------------------------------------------------
 
 local function finish_logistics(s, task, status, reason)
-  stop_character(s.agent)
+  stop_character(s)
+  local belt_step_offs, step_out_count = recovery_counters(s, task)
   local summary = collaboration.summary(task)
   local verification = task.last_verification
   if not verification and task.logistics_plan_id then
@@ -272,6 +307,7 @@ local function finish_logistics(s, task, status, reason)
       coal_remaining = observation.coal_remaining or 0,
     },
     further_work_possible = status ~= "succeeded" and summary.missing_material_total == 0,
+    zones = work_scheduler.plan_summary(task),
     required_items = required_items,
     ghosts_total = summary.ghosts_total,
     built_by_agent = summary.built_by_agent,
@@ -289,14 +325,15 @@ local function finish_logistics(s, task, status, reason)
     inventory_full = summary.inventory_full,
     items_transferred = summary.items_transferred,
     acquisition_trips = task.acquisition_trips or 0,
-    step_out_count = task.step_out_count or 0,
-    step_out_teleports = task.step_out_teleports or 0,
-    belt_step_offs = task.belt_step_offs or 0,
+    step_out_count = step_out_count,
+    step_out_teleports = 0,
+    belt_step_offs = belt_step_offs,
   }
 end
 
 local function finish_construction(s, task, status, reason)
-  stop_character(s.agent)
+  stop_character(s)
+  local belt_step_offs, step_out_count = recovery_counters(s, task)
   local summary = collaboration.summary(task)
   if task.type == "build_logistics" then
     local remaining_ghosts = summary.remaining > 0
@@ -364,9 +401,12 @@ local function finish_construction(s, task, status, reason)
     player_interference = summary.player_interference,
     inventory_full = summary.inventory_full,
     items_transferred = summary.items_transferred,
-    step_out_count = task.step_out_count or 0,
-    step_out_teleports = task.step_out_teleports or 0,
-    belt_step_offs = task.belt_step_offs or 0,
+    step_out_count = step_out_count,
+    step_out_teleports = 0,
+    belt_step_offs = belt_step_offs,
+    zone_batches = task.zone_batches or 0,
+    zone_batch_items = task.zone_batch_items or 0,
+    zones = work_scheduler.plan_summary(task),
   }
 end
 
@@ -376,10 +416,24 @@ end
 
 local function pending_entries(task, agent)
   local result = {}
+  local has_module = false
   for _, entry in pairs(task.entries or {}) do
     if entry.status == "pending" and entry.ghost and entry.ghost.valid then
+      if entry.ghost.tags and entry.ghost.tags.ae_plan_id then has_module = true end
       result[#result + 1] = entry
     end
+  end
+  -- A large module must be built while its footprint is still open. Returning
+  -- only module ghosts until all of them are terminal prevents the executor from
+  -- walling a 2x2/3x3 module in behind freshly built belts.
+  if has_module then
+    local modules = {}
+    for _, entry in ipairs(result) do
+      if entry.ghost and entry.ghost.tags and entry.ghost.tags.ae_plan_id then
+        modules[#modules + 1] = entry
+      end
+    end
+    result = modules
   end
   if task.type == "build_logistics" then
     -- Build the large module ghosts first, while the area is still open. Building belts
@@ -396,9 +450,42 @@ local function pending_entries(task, agent)
       return position_key(a.position) < position_key(b.position)
     end)
   else
-    table.sort(result, function(a, b)
-      return distance(agent.position, a.position) < distance(agent.position, b.position)
-    end)
+    -- Reach-aware construction order. The work scheduler partitions pending work
+    -- into zones derived from the character's actual build distance and prefers the
+    -- zone that can serve the most ghosts, so the character builds a whole batch
+    -- from one position instead of approaching each ghost separately.
+    local reach = work_scheduler.reach_for(nil, agent)
+    if reach then
+      local reach_squared = reach * reach
+      local function covers(position)
+        local count = 0
+        for _, entry in ipairs(result) do
+          local dx = entry.position.x - position.x
+          local dy = entry.position.y - position.y
+          if dx * dx + dy * dy <= reach_squared then count = count + 1 end
+        end
+        return count
+      end
+      local coverage = {}
+      for _, entry in ipairs(result) do
+        coverage[entry.key] = covers(entry.position)
+      end
+      table.sort(result, function(a, b)
+        local ca, cb = coverage[a.key] or 0, coverage[b.key] or 0
+        if ca ~= cb then return ca > cb end
+        local da = distance(agent.position, a.position)
+        local db = distance(agent.position, b.position)
+        if math.abs(da - db) > 1e-9 then return da < db end
+        return a.key < b.key
+      end)
+    else
+      table.sort(result, function(a, b)
+        local da = distance(agent.position, a.position)
+        local db = distance(agent.position, b.position)
+        if math.abs(da - db) > 1e-9 then return da < db end
+        return a.key < b.key
+      end)
+    end
   end
   return result
 end
@@ -458,11 +545,13 @@ local function reset_inflight_entries(task)
   end
 end
 
-local function begin_path(task, agent, goal, kind)
-  local request_id = request_path(agent, goal)
-  if not request_id then return false end
+local function begin_path(s, task, goal, kind, entity_unit)
+  local options = {entity_unit = entity_unit}
+  if task.type == "build_logistics" then options.arrival_tolerance = 0.55 end
+  local ok, reason = begin_move(s, task, goal, kind, options)
+  if not ok then return false, reason end
   task.approach = goal
-  task.path, task.path_index, task.path_request = nil, 1, request_id
+  task.path, task.path_index, task.path_request = nil, 1, nil
   task.phase, task.phase_started_tick = "pathing", game.tick
   task.target_kind = kind
   return true
@@ -639,7 +728,7 @@ local function try_start_obstacle(s, task, agent, entry, surface, ghost, obstacl
   entry.status = "clearing"
   task.target_entry, task.target_ghost, task.target_obstacle = entry.key, ghost, nearest
   task.missing_for_target = nil
-  if not begin_path(task, agent, approach, "obstacle") then
+  if not begin_path(s, task, approach, "obstacle", nearest.unit_number) then
     set_entry_status(task, entry.key, "unreachable", "obstacle_path_failed")
     clear_target(task)
     return false
@@ -666,7 +755,7 @@ local function choose_target(s, task, agent)
             set_entry_status(task, entry.key, "already_built", "built_by_player")
             entry.built_unit = built.unit_number
           else
-            local can_place = context.surface.can_place_entity{
+            local can_place = ghost.surface.can_place_entity{
               name = ghost.ghost_name, position = ghost.position, direction = ghost.direction,
               force = agent.force, build_check_type = defines.build_check_type.ghost_revive,
             }
@@ -691,7 +780,7 @@ local function choose_target(s, task, agent)
               if approach then
                 entry.status = "building"
                 task.target_entry, task.target_ghost = entry.key, ghost
-                if begin_path(task, agent, approach, "ghost") then return true end
+                if begin_path(s, task, approach, "ghost", ghost.unit_number) then return true end
                 clear_target(task)
               end
               set_entry_status(task, entry.key, "pending", "stepping_out")
@@ -718,7 +807,7 @@ local function choose_target(s, task, agent)
                       entry.status = "acquiring"
                       task.target_entry, task.target_ghost, task.target_chest = entry.key, ghost, chest
                       task.missing_for_target = acquisition_missing
-                      if begin_path(task, agent, approach, "chest") then return true end
+                      if begin_path(s, task, approach, "chest", chest.unit_number) then return true end
                       set_entry_status(task, entry.key, "blocked", "chest_path_failed")
                       clear_target(task)
                     else
@@ -734,7 +823,7 @@ local function choose_target(s, task, agent)
                 if approach then
                   entry.status = "building"
                   task.target_entry, task.target_ghost = entry.key, ghost
-                  if begin_path(task, agent, approach, "ghost") then return true end
+                  if begin_path(s, task, approach, "ghost", ghost.unit_number) then return true end
                   set_entry_status(task, entry.key, "unreachable", "ghost_path_failed")
                   clear_target(task)
                 else
@@ -835,18 +924,19 @@ local function try_build_target(s, task, agent)
     -- A 2x2/3x3 ghost can contain the character if it stopped just short of its
     -- approach point. Walk out first; do not misreport the character as a blocker.
     entry.status, entry.reason = "pending", "agent_inside_ghost"
-    stop_character(agent)
+    stop_character(s)
     clear_target(task)
     return
   end
   local ok, reason, entity, proxy = construction.build(agent, ghost)
   if ok then
     entry.status, entry.reason = "built", nil
+    task.last_build_tick = game.tick
     if reason then entry.configuration_error = reason end
     entry.built_unit = entity and entity.unit_number
     if proxy then entry.item_request_proxy = true end
     task.scan_dirty = true
-    stop_character(agent)
+    stop_character(s)
     clear_target(task)
     return
   end
@@ -862,7 +952,7 @@ local function try_build_target(s, task, agent)
   else
     set_entry_status(task, task.target_entry, "blocked", reason or "build_failed")
   end
-  stop_character(agent)
+  stop_character(s)
   clear_target(task)
 end
 
@@ -885,7 +975,7 @@ local function try_clear_target(s, task, agent)
     task.obstacles_cleared[obstacle_name] = (task.obstacles_cleared[obstacle_name] or 0) + 1
     entry.status = "pending"
     task.scan_dirty = true
-    stop_character(agent)
+    stop_character(s)
     clear_target(task)
     return
   end
@@ -897,7 +987,7 @@ local function try_clear_target(s, task, agent)
   else
     set_entry_status(task, task.target_entry, "blocked", reason or "clearing_failed")
   end
-  stop_character(agent)
+  stop_character(s)
   clear_target(task)
 end
 
@@ -958,11 +1048,208 @@ local function try_take_from_chest(s, task, agent)
     entry.status = "pending"
   end
   task.scan_dirty = true
-  stop_character(agent)
+  stop_character(s)
   clear_target(task)
 end
 
+-- Keep the character at a floating working position for a whole zone, building
+-- every ghost that the live can_place_entity check allows from there. The
+-- position is chosen once per zone; ghosts that become reachable are built
+-- without moving, which is the whole point of the reach-aware scheduler.
+local function try_zone_batch(s, task, agent, selection)
+  local zone_id = selection.zone.id
+  local zone_entries_list = work_scheduler.pending_in_zone(task, zone_id)
+  if #zone_entries_list == 0 then
+    work_scheduler.zone_is_complete(task, zone_id)
+    task.active_zone = nil
+    task.scan_dirty = true
+    return false
+  end
+  local batch = 0
+  for _, entry in ipairs(zone_entries_list) do
+    if entry.status ~= "pending" or not entry.ghost or not entry.ghost.valid then
+      -- handled elsewhere
+    else
+      local ghost = entry.ghost
+      local clearable, blocking, players = construction.obstacles(ghost, agent)
+      if #players > 0 then
+        defer_entry(task, entry)
+      elseif #blocking > 0 then
+        for _, blocker in pairs(blocking) do
+          task.obstacles_seen[blocker.name] = (task.obstacles_seen[blocker.name] or 0) + 1
+        end
+        set_entry_status(task, entry.key, "blocked", "blocked_by_existing_entity")
+      elseif #clearable > 0 then
+        -- Natural obstacles are cleared one at a time through the normal path.
+        task.active_zone = zone_id
+        if try_start_obstacle(s, task, agent, entry, agent.surface, ghost, clearable) then
+          return true
+        end
+        set_entry_status(task, entry.key, "blocked", "obstacle_no_approach")
+      else
+        local requirements, requirement_reason = construction.requirements(ghost)
+        if not requirements then
+          set_entry_status(task, entry.key, "unsupported", requirement_reason)
+        elseif not construction.can_place_from(agent, ghost) then
+          -- Not reachable from here: leave it pending so a later zone / position
+          -- picks it up. It stays in this zone's list and blocks completion only
+          -- until some other position can build it.
+          entry.reason = "needs_other_position"
+        else
+          local missing = construction.missing(agent, requirements)
+          if #missing > 0 then
+            local acquisition_missing = missing
+            if task.type == "build_logistics" then
+              local batch_missing = construction.missing(
+                agent, aggregate_pending_requirements(task))
+              if #batch_missing > 0 then acquisition_missing = batch_missing end
+            end
+            if not construction.can_carry_any(agent, acquisition_missing) then
+              task.inventory_full = true
+              set_entry_status(task, entry.key, "blocked", "inventory_full")
+            else
+              local context = collaboration.context(s, agent)
+              local chest = context and construction.chest_with_items(
+                context.surface, context.area, acquisition_missing, agent)
+              local approach = chest and construction.approach_for_entity(
+                agent.surface, chest, agent)
+              if approach then
+                entry.status = "acquiring"
+                task.target_entry, task.target_ghost, task.target_chest =
+                  entry.key, ghost, chest
+                task.missing_for_target = acquisition_missing
+                if begin_path(s, task, approach, "chest", chest.unit_number) then
+                  return true
+                end
+                set_entry_status(task, entry.key, "blocked", "chest_path_failed")
+                clear_target(task)
+              else
+                set_entry_status(task, entry.key, "missing_materials",
+                  "missing_materials", missing)
+              end
+            end
+          else
+            local built, reason = construction.build(agent, ghost)
+            if built then
+              entry.status, entry.reason = "built", nil
+              entry.built_unit = reason
+              task.built_by_agent = (task.built_by_agent or 0) + 1
+              task.items_transferred = task.items_transferred or 0
+              task.scan_dirty = true
+              batch = batch + 1
+            elseif reason == "out_of_reach" then
+              entry.reason = "needs_other_position"
+            else
+              set_entry_status(task, entry.key, "blocked", reason or "build_failed")
+            end
+          end
+        end
+      end
+    end
+  end
+  if batch > 0 then
+    task.zone_batches = (task.zone_batches or 0) + 1
+    task.zone_batch_items = (task.zone_batch_items or 0) + batch
+  end
+  return batch > 0
+end
+
+-- Pay for and revive every ghost in the active zone that the character can
+-- actually reach from where it is standing. Returns true when at least one ghost
+-- was built (so the caller can rescan), false when nothing more was payable.
+local function zone_work_done(s, task, agent, selection)
+  local zone_id = selection.zone.id
+  local pending = work_scheduler.pending_in_zone(task, zone_id)
+  local function is_module(entry)
+    return entry.ghost and entry.ghost.tags and entry.ghost.tags.ae_plan_id ~= nil
+  end
+  local function inside(ghost)
+    local box = ghost.bounding_box
+    return agent.position.x > box.left_top.x - 0.15
+      and agent.position.x < box.right_bottom.x + 0.15
+      and agent.position.y > box.left_top.y - 0.15
+      and agent.position.y < box.right_bottom.y + 0.15
+  end
+  local function try_build(entry)
+    local ghost = entry.ghost
+    if collaboration.player_near(agent, ghost.position) then
+      defer_entry(task, entry)
+      return false
+    end
+    local requirements = construction.requirements(ghost)
+    if requirements and #construction.missing(agent, requirements) == 0
+      and construction.can_place_from(agent, ghost) then
+      local ok, build_reason = construction.build(agent, ghost)
+      if ok then
+        entry.status, entry.reason = "built", nil
+        entry.built_unit = build_reason
+        task.scan_dirty = true
+        return true
+      elseif build_reason ~= "missing_material" then
+        set_entry_status(task, entry.key, "blocked", build_reason)
+      end
+    end
+    return false
+  end
+  local built = 0
+  -- Large plan modules (furnaces, assemblers, miner) go first. Belts built
+  -- around an unbuilt 2x2/3x3 module can enclose its footprint and make it
+  -- permanently unreachable, so non-module ghosts in this zone wait.
+  for _, entry in ipairs(pending) do
+    if entry.status == "pending" and entry.ghost and entry.ghost.valid and is_module(entry) then
+      if inside(entry.ghost) then
+        local ok, request_id = movement.recover(s, task.id, "ghost")
+        if ok then
+          task.movement_request = request_id
+          task.movement_recovery = true
+          task.movement_kind = "step_out"
+          task.phase, task.phase_started_tick = "recovering", game.tick
+          return true
+        end
+        return false
+      end
+      if try_build(entry) then built = built + 1 end
+    end
+  end
+  if built > 0 then
+    task.zone_batches = (task.zone_batches or 0) + 1
+    task.zone_batch_items = (task.zone_batch_items or 0) + built
+    task.last_build_tick = game.tick
+    return true
+  end
+  for _, entry in ipairs(pending) do
+    if entry.status == "pending" and is_module(entry) then
+      -- A module is still pending and not payable from this position. Do not
+      -- build smaller ghosts yet; the scheduler must find a better position.
+      return false
+    end
+  end
+  for _, entry in ipairs(pending) do
+    if entry.status == "pending" and entry.ghost and entry.ghost.valid
+      and not is_module(entry) then
+      if try_build(entry) then built = built + 1 end
+    end
+  end
+  if built > 0 then
+    task.zone_batches = (task.zone_batches or 0) + 1
+    task.zone_batch_items = (task.zone_batch_items or 0) + built
+    task.last_build_tick = game.tick
+  end
+  return built > 0
+end
+
+local function zone_has_pending(task, zone_id)
+  for _, entry in ipairs(work_scheduler.pending_in_zone(task, zone_id)) do
+    if entry.status == "pending" then return true end
+  end
+  return false
+end
+
 local function tick_construction(s, task, agent)
+  -- A save/load (or a cancelled low-level target) discards the in-flight marker.
+  -- Reset it to pending before the scheduler re-scans so a ghost interrupted mid-
+  -- clearing or mid-acquisition is never stranded in a non-pending state.
+  if task.phase == "search" then reset_inflight_entries(task) end
   if game.tick - task.started_tick > (task.deadline_ticks or CONSTRUCTION_BASE_TICKS) then
     local summary = current_summary(task)
     finish_construction(s, task, summary.built_by_agent > 0 and "partial" or "failed",
@@ -970,61 +1257,37 @@ local function tick_construction(s, task, agent)
     return
   end
   local on_belt = construction.on_belt(agent.surface, agent.position)
-  local inside_ghost = inside_pending_ghost(task, agent)
-  -- Native walking out of a ghost or off a working belt. Ghosts do not collide with the
-  -- character and direct walking is more reliable than a path request from a moving or
-  -- embedded start. A successful walk is counted; if the route is genuinely blocked,
-  -- a bounded teleport fallback is used after several attempts.
-  if task.escape_until then
-    if not on_belt and not inside_ghost then
-      stop_character(agent)
-      if task.escape_kind == "belt" then
-        task.belt_step_offs = (task.belt_step_offs or 0) + 1
+  -- Recovery is driven by the Movement Controller's observed conflict, or by an
+  -- explicit module-footprint step-out below. Merely standing on a belt or inside
+  -- a non-colliding ghost is not a reason to replace an in-flight path request.
+  if task.phase == "recovering" and task.movement_recovery then
+    local status = move_status(s, task)
+    local recovered = status and (status.state == "arrived" or status.state == "idle")
+    if status and status.state ~= "blocked" and not recovered then return end
+    if not recovered then
+      movement.cancel(s, task.movement_request)
+      task.movement_request = nil
+      task.step_out_attempts = (task.step_out_attempts or 0) + 1
+      if (task.step_out_attempts or 0) > 4 then
+        task.status, task.pause_reason = "paused", "movement_recovery_failed"
       else
-        task.step_out_count = (task.step_out_count or 0) + 1
+        task.phase, task.phase_started_tick = "search", game.tick
       end
-      task.escape_until, task.escape_direction = nil, nil
-      task.escape_kind, task.escape_attempts = nil, nil
-      reset_inflight_entries(task)
-      task.scan_dirty = true
       return
-    elseif game.tick < task.escape_until then
-      agent.walking_state = {walking = true, direction = task.escape_direction}
-      return
+    end
+    -- The controller reached the free position.
+    task.movement_request = nil
+    if on_belt then
+      task.belt_step_offs = (task.belt_step_offs or 0) + 1
     else
-      task.escape_until, task.escape_direction = nil, nil
-      task.escape_attempts = (task.escape_attempts or 0) + 1
+      task.step_out_count = (task.step_out_count or 0) + 1
     end
-  end
-  if task.phase == "search" and (on_belt or inside_ghost) then
-    local goal = find_step_out_position(agent.surface, task, agent)
-    if goal then
-      if (task.escape_attempts or 0) > 3 then
-        agent.teleport(goal)
-        task.step_out_teleports = (task.step_out_teleports or 0) + 1
-        task.escape_attempts = 0
-        if on_belt then
-          task.belt_step_offs = (task.belt_step_offs or 0) + 1
-        else
-          task.step_out_count = (task.step_out_count or 0) + 1
-        end
-        reset_inflight_entries(task)
-        clear_target(task)
-        task.scan_dirty = true
-        return
-      end
-      local direction = best_walk_direction(agent.surface, task, agent, goal)
-      if direction then
-        task.escape_direction = direction
-        task.escape_until = game.tick + 90
-        task.escape_kind = on_belt and "belt" or "ghost"
-        task.escape_attempts = (task.escape_attempts or 0) + 1
-        agent.walking_state = {walking = true, direction = direction}
-        return
-      end
-      task.escape_attempts = (task.escape_attempts or 0) + 1
-      return
-    end
+    task.step_out_attempts = 0
+    reset_inflight_entries(task)
+    clear_target(task)
+    task.movement_recovery = nil
+    task.scan_dirty = true
+    task.phase, task.phase_started_tick = "search", game.tick
     return
   end
   if task.phase == "search" then
@@ -1032,6 +1295,109 @@ local function tick_construction(s, task, agent)
       collaboration.refresh(s, task, agent)
       task.scan_dirty = false
     end
+    -- Reach-aware scheduling: build everything reachable from the current working
+    -- position before walking anywhere else. This removes the per-ghost approach
+    -- trips that made large plans inefficient.
+    --
+    -- Large plan modules are a deliberate exception: their 2x2/3x3 footprints
+    -- are built through the legacy approach path first, while the area is still
+    -- free of belts. Once no plan module remains, the scheduler batches the
+    -- remaining logistics ghosts by zone.
+    local module_pending = false
+    for _, entry in pairs(task.entries or {}) do
+      if entry.status == "pending" and entry.ghost and entry.ghost.valid
+        and entry.ghost.tags and entry.ghost.tags.ae_plan_id then
+        module_pending = true
+        break
+      end
+    end
+    if module_pending then
+      if choose_target(s, task, agent) then
+        task.settle_started_tick = nil
+        return
+      end
+      -- No module could be started from here. Continue to the scheduler so it can
+      -- choose a better position; the module entries stay pending.
+    end
+    local pending_count = 0
+    for _, entry in pairs(task.entries or {}) do
+      if entry.status == "pending" then pending_count = pending_count + 1 end
+    end
+    if task.legacy_fallback and pending_count > 0 then
+      if choose_target(s, task, agent) then
+        task.settle_started_tick = nil
+        return
+      end
+      -- Retry the scheduler after the legacy executor could not start a target.
+      task.legacy_fallback = false
+      task.last_build_tick = game.tick
+    end
+    if not task.active_zone then
+      local selection, reason, plan = work_scheduler.select(s, task, agent)
+      if not selection then
+        if reason == "no_pending_ghosts" or reason == "build_distance_unavailable" then
+          finish_if_done(s, task, agent)
+          return
+        end
+        -- No usable work position this pass. Fall back to the legacy per-target
+        -- loop, which can still clear obstacles and fetch chest materials.
+        if choose_target(s, task, agent) then
+          task.settle_started_tick = nil
+          return
+        end
+        finish_if_done(s, task, agent)
+        return
+      end
+      task.active_zone = selection.zone.id
+      task.active_zone_position = selection.position
+      task.zone_transitions = (task.zone_transitions or 0) + 1
+      task.active_zone_attempts = (task.active_zone_attempts or 0) + 1
+      if distance(agent.position, selection.position) <= 1.5 then
+        -- Already standing at the chosen working position.
+        if try_zone_batch(s, task, agent, selection) then return end
+        work_scheduler.reject_position(task, selection.zone.id, selection.position)
+        task.active_zone = nil
+        return
+      end
+      if begin_path(s, task, selection.position, "work_zone") then
+        task.phase, task.phase_started_tick = "pathing", game.tick
+        task.zone_selection = selection
+        return
+      end
+      work_scheduler.reject_position(task, selection.zone.id, selection.position)
+      task.active_zone = nil
+      return
+    end
+    -- At a selected working position: build every reachable ghost in the zone.
+    if task.zone_selection and task.zone_selection.zone.id == task.active_zone then
+      local zone_id = task.active_zone
+      if zone_work_done(s, task, agent, task.zone_selection) then return end
+      -- Hand the rest to the legacy executor so clearing, chest acquisition and
+      -- player deference keep working exactly as before. Once it has started a
+      -- target, this zone owns the task until that target resolves.
+      if zone_has_pending(task, zone_id) then
+        if choose_target(s, task, agent) then
+          task.settle_started_tick = nil
+          return
+        end
+        -- Nothing was actionable from here either. Try a different floating
+        -- position for the same zone before giving up on it.
+        work_scheduler.reject_position(task, zone_id, task.active_zone_position)
+        task.active_zone, task.zone_selection = nil, nil
+        task.active_zone_attempts = (task.active_zone_attempts or 0) + 1
+        if (task.active_zone_attempts or 0) >= 4 then
+          task.legacy_fallback = true
+          task.active_zone_attempts = 0
+          task.last_build_tick = game.tick
+        end
+        return
+      end
+      work_scheduler.zone_is_complete(task, zone_id)
+      task.active_zone, task.zone_selection = nil, nil
+      return
+    end
+    task.active_zone = nil
+    task.zone_selection = nil
     if choose_target(s, task, agent) then
       task.settle_started_tick = nil
       return
@@ -1040,19 +1406,77 @@ local function tick_construction(s, task, agent)
     return
   end
   if task.phase == "pathing" then
+    local status = move_status(s, task)
+    if not status then return end
+    if status.state == "blocked" then
+      if task.target_kind == "work_zone" and task.zone_selection then
+        -- Try another floating position for the same zone before giving up on it.
+        work_scheduler.reject_position(task, task.zone_selection.zone.id,
+          task.zone_selection.position)
+        task.active_zone = nil
+        task.zone_selection = nil
+        task.target_kind = nil
+        task.work_zone_path_failures = (task.work_zone_path_failures or 0) + 1
+        if task.work_zone_path_failures >= 4 then
+          task.legacy_fallback = true
+          task.work_zone_path_failures = 0
+          task.last_build_tick = game.tick
+        end
+        task.phase, task.phase_started_tick = "search", game.tick
+        return
+      end
+      construction_path_failed(task, status.reason or "path_failed")
+      return
+    end
+    if status.state == "arrived" and task.target_kind == "work_zone" then
+      task.phase, task.phase_started_tick = "search", game.tick
+      return
+    end
+    if status.state == "arrived" or status.state == "following_path" then
+      -- Keep the legacy "moving" phase observable while the character walks.
+      task.phase, task.phase_started_tick = "moving", game.tick
+      return
+    end
     if game.tick - (task.phase_started_tick or game.tick) > PATH_TIMEOUT_TICKS then
       construction_path_failed(task, "path_timeout")
       return
     end
-    if not target_valid(task) then
+    if task.target_kind ~= "work_zone" and not target_valid(task) then
       abort_target(task, "cancelled", "target_removed")
+    end
+    return
+  end
+  if task.phase == "moving" and task.target_kind == "work_zone" then
+    local status = move_status(s, task)
+    if status and status.state == "blocked" then
+      if task.zone_selection then
+        work_scheduler.reject_position(task, task.zone_selection.zone.id,
+          task.zone_selection.position)
+      end
+      task.active_zone, task.zone_selection = nil, nil
+      task.target_kind = nil
+      task.phase, task.phase_started_tick = "search", game.tick
+      return
+    end
+    if status and status.state == "arrived" then
+      task.phase, task.phase_started_tick = "search", game.tick
+      return
+    end
+    if game.tick - (task.phase_started_tick or game.tick) > MOVE_TIMEOUT_TICKS then
+      if task.zone_selection then
+        work_scheduler.reject_position(task, task.zone_selection.zone.id,
+          task.zone_selection.position)
+      end
+      task.active_zone, task.zone_selection = nil, nil
+      task.target_kind = nil
+      task.phase, task.phase_started_tick = "search", game.tick
     end
     return
   end
   if task.phase == "moving" then
     local position = target_position(task)
     if not position then
-      stop_character(agent)
+      stop_character(s)
       abort_target(task, "cancelled", "target_removed")
       return
     end
@@ -1062,14 +1486,19 @@ local function tick_construction(s, task, agent)
       clear_target(task)
       return
     end
+    local status = move_status(s, task)
+    if status and status.state == "blocked" then
+      abort_target(task, "unreachable", status.reason or "movement_blocked")
+      return
+    end
     if game.tick - (task.phase_started_tick or game.tick) > MOVE_TIMEOUT_TICKS then
       abort_target(task, "unreachable", "movement_timeout")
       return
     end
-    local arrived = follow_path(agent, task)
-    local arrival_tolerance = task.type == "build_logistics" and 0.55 or 1.5
-    if arrived or distance(agent.position, task.approach) <= arrival_tolerance then
-      stop_character(agent)
+    local arrived = status and status.state == "arrived"
+    local close_enough = distance(agent.position, task.approach) <= 1.5
+    if arrived or close_enough then
+      stop_character(s)
       if construction.on_belt(agent.surface, agent.position) then
         task.phase, task.phase_started_tick = "search", game.tick
         return
@@ -1080,37 +1509,6 @@ local function tick_construction(s, task, agent)
         try_clear_target(s, task, agent)
       elseif task.target_kind == "chest" then
         try_take_from_chest(s, task, agent)
-      elseif task.target_kind == "step_out" then
-        if inside_pending_ghost(task, agent)
-          or construction.on_belt(agent.surface, agent.position) then
-          task.step_out_attempts = (task.step_out_attempts or 0) + 1
-          local safe = find_step_out_position(agent.surface, task, agent)
-          if safe then
-            if task.step_out_attempts > 4 then
-              agent.teleport(safe)
-              task.step_out_teleports = (task.step_out_teleports or 0) + 1
-              task.step_out_attempts = 0
-              task.step_out_count = (task.step_out_count or 0) + 1
-              reset_inflight_entries(task)
-              clear_target(task)
-              task.scan_dirty = true
-              return
-            end
-            task.step_out_reason = construction.on_belt(
-              agent.surface, agent.position) and "belt" or "ghost"
-            if begin_path(task, agent, safe, "step_out") then return end
-          end
-          return
-        end
-        task.step_out_count = (task.step_out_count or 0) + 1
-        if task.step_out_reason == "belt" then
-          task.belt_step_offs = (task.belt_step_offs or 0) + 1
-        end
-        task.step_out_attempts = 0
-        task.step_out_reason = nil
-        reset_inflight_entries(task)
-        clear_target(task)
-        task.scan_dirty = true
       else
         clear_target(task)
       end
@@ -1147,9 +1545,17 @@ local function start_construction(s, p)
     built_by_agent = 0, already_built = 0, cancelled = 0, items_transferred = 0,
     acquisition_trips = 0, step_out_count = 0, step_out_teleports = 0,
     belt_step_offs = 0,
+    active_zone = nil, active_zone_position = nil, zone_selection = nil,
+    zone_batches = 0, zone_batch_items = 0,
+    last_build_tick = game.tick, legacy_fallback = false,
+    movement_stats_base = {
+      belt_recoveries = (movement.stats(s) or {}).belt_recoveries or 0,
+      ghost_recoveries = (movement.stats(s) or {}).ghost_recoveries or 0,
+    },
     work_area = {available = true, radius = collaboration.work_radius(),
       center = agent.position},
   }
+  s.task.initial_belt = construction.on_belt(agent.surface, agent.position)
   return {task_id = s.task.id, status = s.task.status}
 end
 
@@ -1173,6 +1579,13 @@ local function start_logistics(s, p)
     deadline_ticks = LOGISTICS_DEADLINE_TICKS,
     construction_retries = 0, items_transferred = 0, acquisition_trips = 0,
     step_out_count = 0, step_out_teleports = 0, belt_step_offs = 0,
+    active_zone = nil, active_zone_position = nil, zone_selection = nil,
+    zone_batches = 0, zone_batch_items = 0,
+    last_build_tick = game.tick, legacy_fallback = false,
+    movement_stats_base = {
+      belt_recoveries = (movement.stats(s) or {}).belt_recoveries or 0,
+      ghost_recoveries = (movement.stats(s) or {}).ghost_recoveries or 0,
+    },
     work_area = {available = true, radius = collaboration.work_radius(),
       center = s.agent.position},
   }
@@ -1314,12 +1727,16 @@ local function tick_logistics_verification(s, task, agent)
       task.route_invalid_attempts = 0
     end
     if not verification.fuel then
-      local depleted = (verification.observation.coal_remaining or 0) <= 0
-      finish_logistics(s, task, "blocked",
-        depleted and "missing_fuel_source:fuel_depleted"
-        or "missing_fuel_source:fuel_not_delivered")
+      task.fuel_wait_started_tick = task.fuel_wait_started_tick or game.tick
+      if game.tick - task.fuel_wait_started_tick > LOGISTICS_FUEL_GRACE_TICKS then
+        local depleted = (verification.observation.coal_remaining or 0) <= 0
+        finish_logistics(s, task, "blocked",
+          depleted and "missing_fuel_source:fuel_depleted"
+          or "missing_fuel_source:fuel_not_delivered")
+      end
       return
     end
+    task.fuel_wait_started_tick = nil
     if verification.ok then
       finish_logistics(s, task, "succeeded", "multi_consumer_production_observed")
       return
@@ -1343,11 +1760,15 @@ local function tick_logistics_verification(s, task, agent)
     return
   end
   if not verification.fuel then
-    finish_logistics(s, task, "blocked",
-      verification.observation.coal_seen and "missing_fuel_source:fuel_depleted"
-      or "missing_fuel_source:fuel_not_delivered")
+    task.fuel_wait_started_tick = task.fuel_wait_started_tick or game.tick
+    if game.tick - task.fuel_wait_started_tick > LOGISTICS_FUEL_GRACE_TICKS then
+      finish_logistics(s, task, "blocked",
+        verification.observation.coal_seen and "missing_fuel_source:fuel_depleted"
+        or "missing_fuel_source:fuel_not_delivered")
+    end
     return
   end
+  task.fuel_wait_started_tick = nil
   if verification.produced then
     finish_logistics(s, task, "succeeded", "production_observed")
     return
@@ -1436,10 +1857,13 @@ end
 
 function M.tick(s)
   local task, agent = s.task, s.agent
+  -- The movement controller runs before task logic so it owns the single per-tick
+  -- walking update and can interrupt an ordinary route for a higher priority intent.
+  movement.tick(s)
   if not task or task.status ~= "running" or not agent or not agent.valid then return end
   if s.safety and s.safety.active then
     task.status, task.pause_reason = "paused", "safety"
-    stop_character(agent)
+    stop_character(s)
     return
   end
   if task.type == "assist_construction" then
@@ -1489,9 +1913,9 @@ function M.status(s, task_id)
       inventory_full = summary.inventory_full,
       items_transferred = summary.items_transferred,
       acquisition_trips = task.acquisition_trips or 0,
-      step_out_count = task.step_out_count or 0,
-      step_out_teleports = task.step_out_teleports or 0,
-      belt_step_offs = task.belt_step_offs or 0,
+      step_out_count = (function() local b, g = recovery_counters(s, task); return g end)(),
+      step_out_teleports = 0,
+      belt_step_offs = (function() local b, g = recovery_counters(s, task); return b end)(),
       logistics_status = logistics.status(s, task.logistics_plan_id or "").physical
         and logistics.status(s, task.logistics_plan_id or "").physical.status or nil,
       power_status = verification.power and "connected" or nil,
@@ -1525,9 +1949,14 @@ function M.status(s, task_id)
       player_interference = summary.player_interference,
       inventory_full = summary.inventory_full,
       items_transferred = summary.items_transferred,
-      step_out_count = task.step_out_count or 0,
-      step_out_teleports = task.step_out_teleports or 0,
-      belt_step_offs = task.belt_step_offs or 0,
+      step_out_count = (function() local b, g = recovery_counters(s, task); return g end)(),
+      step_out_teleports = 0,
+      belt_step_offs = (function() local b, g = recovery_counters(s, task); return b end)(),
+      active_zone = task.active_zone,
+      zones = work_scheduler.plan_summary(task),
+      zone_batches = task.zone_batches or 0,
+      zone_batch_items = task.zone_batch_items or 0,
+      zones = work_scheduler.plan_summary(task),
       emergency = emergency,
     }
   end
@@ -1561,6 +1990,12 @@ function M.resume(s, task_id)
   assert(s.agent and s.agent.valid, "Agent is not alive")
   assert(not (s.safety and s.safety.active), "Safety controller is still active")
   task.status, task.pause_reason = "running", nil
+  movement.cancel_owner(s, task.id)
+  task.movement_request = nil
+  task.active_zone, task.zone_selection = nil, nil
+  task.legacy_fallback = false
+  task.last_build_tick = game.tick
+  if task.work_plan then task.work_plan = nil end
   if task.type == "build_logistics" then
     reset_inflight_entries(task)
     clear_target(task)
@@ -1581,6 +2016,7 @@ function M.resume(s, task_id)
     task.deadline_ticks = CONSTRUCTION_BASE_TICKS + 4 * CONSTRUCTION_TICKS_PER_GHOST
   else
     task.phase, task.target, task.path, task.path_request = "search", nil, nil, nil
+    task.movement_request = nil
     task.start_count = inventory_count(s.agent, task.resource) - (task.collected or 0)
     task.started_tick, task.last_progress_tick = game.tick, game.tick
   end
@@ -1589,11 +2025,12 @@ end
 
 function M.on_agent_died(s)
   local task, agent = s.task, s.agent
+  movement.on_agent_died(s)
   if task and task.status == "running" then
     if task.type == "assist_construction" or task.type == "build_logistics" then
       task.status, task.pause_reason = "paused", "death"
       reset_inflight_entries(task)
-      clear_target(task)
+      task.movement_request = nil
       return
     end
     if agent and agent.valid then

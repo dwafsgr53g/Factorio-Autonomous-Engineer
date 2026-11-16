@@ -48,11 +48,12 @@ def scenario_h1() -> None:
     print("\nScenario H1 — save/load during clearing")
     b = fresh("s6h1-clearing.zip")
     h.create_natural("tree-01", 42, 8, b)
-    h.create_natural("big-sand-rock", 46, 8, b)
+    h.create_natural("big-sand-rock", 48, 8, b)
     h.create_ghost("transport-belt", 42, 8, direction=4, b=b)
-    h.create_ghost("transport-belt", 46, 8, direction=4, b=b)
-    h.create_ghost("transport-belt", 62, 8, direction=4, b=b)
+    h.create_ghost("transport-belt", 48, 8, direction=4, b=b)
+    h.create_ghost("transport-belt", 55, 8, direction=4, b=b)
     h.give_items({"transport-belt": 3}, b)
+    h.lua("game.speed = 5", b)
     task_id = h.task_start({"task": "assist_construction"}, b)["task_id"]
     h.wait(lambda: (h.status(b)["task"].get("status") == "running"
                     and h.status(b)["task"].get("built_by_agent", 0) >= 1
@@ -88,6 +89,7 @@ def scenario_h2() -> None:
     h.place_plan("single_furnace", b)
     ghost = h.ghosts(b)[0]
     chest = h.create_chest(60, 10, {"stone-furnace": 1}, b)
+    h.lua("game.speed = 5", b)
     task_id = h.task_start({"task": "assist_construction"}, b)["task_id"]
     h.wait(lambda: (h.status(b)["task"].get("items_transferred", 0) >= 1
                     and h.status(b)["task"].get("built_by_agent", 0) == 0
@@ -122,9 +124,10 @@ def scenario_h2() -> None:
 async def scenario_h3() -> None:
     print("\nScenario H3 — Safety Controller pre-emption and explicit resume")
     b = fresh("s6h3-safety.zip")
-    for x in (42, 47, 52):
+    for x in (42, 48, 52):
         h.create_ghost("transport-belt", x, 8, direction=4, b=b)
     h.give_items({"transport-belt": 3}, b)
+    h.lua("game.speed = 5", b)
     runner = h.TaskRunner(b, poll_interval=1.0)
     execute = asyncio.create_task(runner.execute({"task": "assist_construction"}, timeout=600))
     await asyncio.to_thread(
@@ -146,6 +149,7 @@ async def scenario_h3() -> None:
     print("  after safety cleared:", h.pretty(paused)[:500])
     check("task does not resume automatically", paused.get("status") == "paused"
           and paused.get("reason") in {"safety", "awaiting_llm_resume"}, h.pretty(paused)[:300])
+    h.lua("game.speed = 60", b)
     print("  resume:", h.pretty(b.call("task_resume", {"task_id": result["task_id"]})["result"]))
     final = await asyncio.to_thread(h.wait_task, result["task_id"], b, timeout=240)
     print("  final:", h.pretty(final))
@@ -161,6 +165,7 @@ def scenario_h4() -> None:
     h.create_ghost("transport-belt", 50, 8, direction=4, b=b)
     h.give_items({"transport-belt": 1}, b)
     before = h.snapshot(b)["main"]
+    h.lua("game.speed = 5", b)
     task_id = h.task_start({"task": "assist_construction"}, b)["task_id"]
     h.wait(lambda: h.status(b)["task"].get("phase") in {"moving", "pathing"},
            timeout=60, what="agent moving")
@@ -185,6 +190,7 @@ def scenario_h5() -> None:
     h.create_ghost("transport-belt", 55, 8, direction=4, b=b)
     player = h.create_player_character(42, 11, b)
     h.give_items({"transport-belt": 2}, b)
+    h.lua("game.speed = 5", b)
     task_id = h.task_start({"task": "assist_construction"}, b)["task_id"]
     result = h.wait_task(task_id, b, timeout=120)
     print("  result:", h.pretty(result))
@@ -210,6 +216,7 @@ def scenario_h6() -> None:
     h.create_ghost("stone-furnace", 42, 8, b=b)
     h.create_ghost("stone-furnace", 50, 8, b=b)
     chest = h.create_chest(32, 16, {"stone-furnace": 2}, b)
+    h.lua("game.speed = 5", b)
     task_id = h.task_start({"task": "assist_construction"}, b)["task_id"]
     h.wait(lambda: (h.status(b)["task"].get("items_transferred", 0) >= 1
                     and h.status(b)["task"].get("built_by_agent", 0) == 0),
@@ -217,6 +224,7 @@ def scenario_h6() -> None:
     print("  after first transfer:", h.pretty(h.status(b)["task"])[:600])
     removed = h.remove_chest_items(chest["unit"], "stone-furnace", 1, b)
     print("  player removed from chest:", removed)
+    h.lua("game.speed = 60", b)
     result = h.wait_task(task_id, b, timeout=180)
     print("  final:", h.pretty(result))
     check("player removal is observed", removed == 1)
@@ -230,9 +238,10 @@ def scenario_h6() -> None:
 def scenario_h7() -> None:
     print("\nScenario H7 — death and respawn during construction")
     b = fresh("s6h7-death.zip")
-    for x in (42, 47, 52):
+    for x in (42, 48, 52):
         h.create_ghost("transport-belt", x, 8, direction=4, b=b)
     h.give_items({"transport-belt": 3}, b)
+    h.lua("game.speed = 5", b)
     task_id = h.task_start({"task": "assist_construction"}, b)["task_id"]
     h.wait(lambda: h.status(b)["task"].get("phase") in {"moving", "pathing"},
            timeout=60, what="construction moving")
@@ -249,6 +258,7 @@ def scenario_h7() -> None:
           and paused.get("reason") == "death", h.pretty(paused)[:250])
     check("construction materials survive death", recovered.get("transport-belt") == 3,
           h.pretty(recovered))
+    h.lua("game.speed = 60", b)
     print("  resume:", h.pretty(b.call("task_resume", {"task_id": task_id})["result"]))
     final = h.wait_task(task_id, b, timeout=240)
     print("  final:", h.pretty(final))

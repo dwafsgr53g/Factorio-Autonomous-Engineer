@@ -126,6 +126,26 @@ both consumers are supplied and real production/output are observed. Player-owne
 infrastructure is never replaced; removed real routes and cancelled ghosts are reported, not
 rebuilt. See [advanced-logistics.md](advanced-logistics.md).
 
+## Stage 7.1: movement and construction scheduling
+
+`lib/movement.lua` is the sole writer of the agent's `walking_state`. Gathering, construction,
+logistics and safety submit owned movement intents; path callbacks are correlated by engine request
+ID, intent ID, generation and pending state. Ordinary movement and all belt/ghost recovery use
+native pathfinding and walking, never teleportation. Safety emergency intents retain priority over
+ordinary tasks, and terminal tasks release their primary intent before a replacement starts.
+
+Belt recovery requires an actual direction conflict or observed undesired displacement. An aligned
+belt ride is valid: callback alignment skips waypoints already reached and compares against the next
+effective waypoint. Recovery preserves the original target, walks to a verified non-belt position,
+then requests a fresh path. Save/load restores that original target before discarding transient path
+state. See [movement.md](movement.md).
+
+`lib/work_scheduler.lua` partitions each task's existing ghost ledger into zones derived from live
+`build_distance`. A floating work position covers as many reachable ghosts as possible, and the paid
+executor builds all of them from that position without per-ghost close approaches. Zone ordering,
+rejected positions and active selection are task-local; completed construction and deduplication
+records remain persistent. See [construction-work-scheduler.md](construction-work-scheduler.md).
+
 ## Shared-world collaboration
 
 Player actions are reconciled against the same ghost and entity objects. The executor does not delete, deconstruct or reconfigure player buildings. A player completion is recognized by the real entity at the ghost position, a cancellation by the absence of both ghost and replacement entity, and a blueprint change by a new ghost identity. Player presence near a target defers that target rather than racing the player. Materials removed by a player from a chest are observed through the actual inventory counts at transfer time.

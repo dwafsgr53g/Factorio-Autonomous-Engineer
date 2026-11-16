@@ -147,9 +147,9 @@ def scenario_a() -> None:
           h.pretty([edge for edge in plan["edges"]
                     if edge.get("status") == "route_required"]))
     check("no ghost or real module was created by planning",
-          len(h.ghosts(b)) == 0 and not h.entities_named(
+          len(h.ghosts(b, radius=160)) == 0 and not h.entities_named(
               ["electric-mining-drill", "stone-furnace", "assembling-machine-1"], b),
-          h.pretty(h.ghosts(b)))
+          h.pretty(h.ghosts(b, radius=160)))
     check("planning leaves the agent inventory unchanged",
           h.snapshot(b)["main"] == before_inventory,
           f"{before_inventory} -> {h.snapshot(b)['main']}")
@@ -224,7 +224,7 @@ def scenario_b(b: h.Bridge) -> None:
               h.pretty(output))
     check("all four orientations produce distinct deterministic plan identities",
           len(ids) == 4, h.pretty(sorted(ids)))
-    check("rotation planning creates no ghosts", len(h.ghosts(b)) == 0)
+    check("rotation planning creates no ghosts", len(h.ghosts(b, radius=160)) == 0)
 
 
 def scenario_c(b: h.Bridge, anchor: dict) -> None:
@@ -260,7 +260,7 @@ def scenario_c(b: h.Bridge, anchor: dict) -> None:
           h.pretty([(module["node_id"], module["bounds"])
                     for module in ghost_plan["modules"]]))
     check("the player construction ghost remains in the world",
-          any(item["unit"] == player_ghost["unit"] for item in h.ghosts(b)))
+          any(item["unit"] == player_ghost["unit"] for item in h.ghosts(b, radius=160)))
     check("the player ghost forces a different, deterministic plan",
           ghost_plan["id"] != plan["id"], h.pretty(ghost_plan["id"]))
     h.cancel_ghost(player_ghost["unit"], b)
@@ -302,7 +302,7 @@ def scenario_c(b: h.Bridge, anchor: dict) -> None:
     clearing_apply = h.apply_layout(clearing_plan["id"], b)
     check("a clearing-required plan still materializes only ghosts",
           clearing_apply.get("status") == "applied"
-          and len(h.ghosts(b)) == len(clearing_plan["modules"]),
+          and len(h.ghosts(b, radius=160)) == len(clearing_plan["modules"]),
           h.pretty(clearing_apply))
 
 
@@ -315,7 +315,7 @@ def scenario_d() -> None:
     before_real = h.entities_named(
         ["electric-mining-drill", "stone-furnace", "assembling-machine-1"], b)
     first = h.apply_layout_public(pid, b)
-    ghosts = h.ghosts(b)
+    ghosts = h.ghosts(b, radius=160)
     tags = h.ghost_tags(b)
     print("  apply:", h.pretty(first))
     check("apply creates one ghost per selected module",
@@ -346,7 +346,7 @@ def scenario_d() -> None:
     check("repeated apply is idempotent",
           second.get("status") == "already_applied"
           and second.get("created_module_count") == 0
-          and [ghost["unit"] for ghost in h.ghosts(b)] == ghost_units,
+          and [ghost["unit"] for ghost in h.ghosts(b, radius=160)] == ghost_units,
           h.pretty(second))
 
     h.save_as("s8d-ghosts", b)
@@ -360,9 +360,9 @@ def scenario_d() -> None:
           and reloaded["plan"]["application"]["status"] in {"applied", "already_applied"},
           h.pretty(reloaded.get("plan", {}).get("application")))
     check("ghost identities survive save/load",
-          sorted(ghost["unit"] for ghost in h.ghosts(b)) == sorted(ghost_units)
+          sorted(ghost["unit"] for ghost in h.ghosts(b, radius=160)) == sorted(ghost_units)
           and {tag["tags"].get("ae_plan_id") for tag in h.ghost_tags(b)} == {pid},
-          h.pretty(h.ghosts(b)))
+          h.pretty(h.ghosts(b, radius=160)))
     after_load = h.apply_layout_public(pid, b)
     check("apply after save/load stays idempotent",
           after_load.get("status") == "already_applied"
@@ -374,11 +374,11 @@ def scenario_d() -> None:
     check("a player-cancelled plan ghost is not recreated",
           after_cancel.get("status") == "partially_applied"
           and len(after_cancel.get("cancelled", [])) == 1
-          and len(h.ghosts(b)) == 2, h.pretty(after_cancel))
+          and len(h.ghosts(b, radius=160)) == 2, h.pretty(after_cancel))
     check("the cancelled ghost remains absent",
-          not any(ghost["unit"] == cancelled_unit for ghost in h.ghosts(b)))
+          not any(ghost["unit"] == cancelled_unit for ghost in h.ghosts(b, radius=160)))
 
-    remaining = h.ghosts(b)
+    remaining = h.ghosts(b, radius=160)
     built_key = next(tag["tags"]["ae_instance_key"] for tag in h.ghost_tags(b)
                      if tag["unit"] == remaining[0]["unit"])
     built = h.build_ghost_as_player(remaining[0]["unit"], b)
@@ -406,7 +406,7 @@ def scenario_d() -> None:
                       anchor["x"] + 36, anchor["y"] + 36, b, keep_resources=True)
     staged = h.place_plan("test_basic", b)
     check("the Stage-3 named ghost plan still works",
-          staged.get("success") is True and len(h.ghosts(b)) == 3,
+          staged.get("success") is True and len(h.ghosts(b, radius=160)) == 3,
           h.pretty(staged))
 
 
@@ -420,7 +420,7 @@ def scenario_e() -> None:
     chest = h.create_chest(centre["x"], centre["y"], {}, b)
     stale = h.apply_layout(plan["id"], b)
     check("a new real building invalidates the stored plan",
-          stale.get("status") == "stale_plan" and len(h.ghosts(b)) == 0,
+          stale.get("status") == "stale_plan" and len(h.ghosts(b, radius=160)) == 0,
           h.pretty(stale))
     check("the stale plan does not delete or overwrite the new building",
           bool(h.entity_at("wooden-chest", chest["position"]["x"],
@@ -436,10 +436,10 @@ def scenario_e() -> None:
     ghost = h.create_ghost("transport-belt", point["x"], point["y"], b=b)
     stale = h.apply_layout(plan["id"], b)
     check("a new player construction ghost invalidates the stored plan",
-          stale.get("status") == "stale_plan" and len(h.ghosts(b)) == 1,
+          stale.get("status") == "stale_plan" and len(h.ghosts(b, radius=160)) == 1,
           h.pretty(stale))
     check("the player construction ghost is preserved",
-          h.ghosts(b)[0]["unit"] == ghost["unit"])
+          h.ghosts(b, radius=160)[0]["unit"] == ghost["unit"])
     h.cancel_ghost(ghost["unit"], b)
 
     b, anchor = prepare("s8e-stale-player.zip")
@@ -450,7 +450,7 @@ def scenario_e() -> None:
     player = h.create_player_character(centre["x"], centre["y"], b)
     stale = h.apply_layout(plan["id"], b)
     check("player activity at a planned site invalidates the stored plan",
-          stale.get("status") == "stale_plan" and len(h.ghosts(b)) == 0,
+          stale.get("status") == "stale_plan" and len(h.ghosts(b, radius=160)) == 0,
           h.pretty(stale))
     h.remove_entity(player["unit"], b)
 
@@ -462,7 +462,7 @@ def scenario_e() -> None:
                       keep_resources=False)
     stale = h.apply_layout(plan["id"], b)
     check("resource removal invalidates the mining placement",
-          stale.get("status") == "stale_plan" and len(h.ghosts(b)) == 0,
+          stale.get("status") == "stale_plan" and len(h.ghosts(b, radius=160)) == 0,
           h.pretty(stale))
 
 

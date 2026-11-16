@@ -118,6 +118,7 @@ def start_server(save: str, *, wait_port: float = 60) -> None:
             speed = os.environ.get("FACTORIO_GAME_SPEED")
             if speed:
                 probe.lua(f"game.speed = {speed}")
+                probe.lua(f"game.speed = {speed}")
             return
         except (OSError, BridgeError):
             time.sleep(1)

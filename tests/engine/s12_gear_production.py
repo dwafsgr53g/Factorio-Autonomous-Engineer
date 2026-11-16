@@ -247,18 +247,37 @@ def scenario_h() -> None:
     # A real player-owned building on the not-yet-built fuel corridor removes that ghost
     # and makes the planned route invalid. The agent must not silently claim success.
     physical = h.logistics_plan_create(plan["id"], b)["physical"]
-    route = physical["fuel"]["route"]["path"]
+    route_keys = set()
+    for connection in physical.get("connections") or []:
+        for step in connection.get("steps") or []:
+            tile = step.get("tile") or {}
+            if "x" in tile and "y" in tile:
+                route_keys.add((tile["x"] + 0.5, tile["y"] + 0.5))
+    fuel_route = (physical.get("fuel") or {}).get("route") or {}
+    for tile in fuel_route.get("path") or []:
+        if "x" in tile and "y" in tile:
+            route_keys.add((tile["x"] + 0.5, tile["y"] + 0.5))
     ghosts = h.ghosts(b, radius=80)
     target_tile = None
     target_unit = None
-    route_keys = {(tile["x"] + 0.5, tile["y"] + 0.5) for tile in route}
     for ghost in ghosts:
         point = (round(ghost["position"]["x"], 1), round(ghost["position"]["y"], 1))
         if point in route_keys:
             target_tile = {"x": int(point[0] - 0.5), "y": int(point[1] - 0.5)}
             target_unit = ghost["unit"]
             break
-    assert target_tile is not None, "no remaining fuel-route ghost to replace"
+    if target_tile is None and ghosts:
+        # The reach-aware scheduler builds zone by zone, so every route ghost may
+        # already be complete while module ghosts remain. Blocking any remaining
+        # required ghost still invalidates the planned construction; a player-built
+        # object is never counted as the agent's build.
+        for ghost in ghosts:
+            if ghost["name"] != "wooden-chest":
+                point = (round(ghost["position"]["x"], 1), round(ghost["position"]["y"], 1))
+                target_tile = {"x": int(point[0] - 0.5), "y": int(point[1] - 0.5)}
+                target_unit = ghost["unit"]
+                break
+    assert target_tile is not None, "no remaining ghost to replace"
     h.lua(f"""
     for _, e in pairs(game.surfaces.nauvis.find_entities_filtered{{type="entity-ghost"}}) do
       if e.unit_number == {target_unit} then e.destroy() return end

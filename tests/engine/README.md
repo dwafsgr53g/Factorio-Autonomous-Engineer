@@ -61,6 +61,11 @@ scenarios never inherit each other's state.
 | `s14_underground_belts.py` | Stage 7 B: live yellow-belt reach, min/max distance, over-range rejection, splitter geometry, reciprocal underground neighbours, paid pair construction and coal transfer, player-owned endpoint protection |
 | `s15_multi_consumer_expansion.py` | Stage 7 C: working Stage-6 chain plus parallel multi-consumer cell, both factories operational, unchanged old units, all 14 routes/splitters/underground pair connected, merged gear output |
 | `s16_factory_persistence.py` | Stage 7 D: save/load during construction and production, repeated execution, cancellation/restart, player-removed route, safety and death recovery without duplication |
+| `s17_movement_pathfinding.py` | Stage 7.1 A/B: live build reach, native path requests, waypoint arrival, bounded unreachable routes, cancellation |
+| `s18_movement_recovery.py` | Stage 7.1 recovery: aligned belts without step-off, conflicting belt displacement and target resume, ghost step-out, bounded blocked routes, save/load and safety during belt recovery |
+| `s19_construction_work_zones.py` | Stage 7.1 C: live-reach zones, floating positions, batch construction and occupied-position reselection |
+| `s20_movement_persistence.py` | Stage 7.1 D: movement/task persistence, cancellation, safety, death/respawn and sole `walking_state` writer audit |
+| `s21_sequential_task_isolation.py` | immediate task restart, fresh task/movement IDs, per-task work-zone ledgers and stale callback rejection |
 
 Run one at a time (they share RCON/game ports inside a profile). Never point two profiles at the
 same RCON port. `stop_server()` terminates only the Factorio process whose command line contains the
@@ -134,3 +139,26 @@ FACTORIO_TEST_DIR="$PWD/.runtime/factorio-stage7-test" FACTORIO_RCON_PASSWORD=..
 
 Stage-7 scenarios use speed 60 except save/load, cancellation, safety and death windows, which
 temporarily use speed 1–5 and restore 60. A skipped scenario is never reported as PASS.
+
+
+## Stage-7.1 isolated run
+
+Use the separate `factorio-stage71-test` profile and its `s71-baseline.zip`; do not reuse or alter
+Stage-5/6/7 human saves or servers. Routine scenarios run at speed 60, with recovery and save/load
+windows at speed 1–5.
+
+```
+FACTORIO_TEST_DIR="$PWD/.runtime/factorio-stage71-test" FACTORIO_RCON_PASSWORD=... \
+FACTORIO_RCON_PORT=27081 FACTORIO_GAME_PORT=27042 FACTORIO_GAME_SPEED=60 \
+  uv run python tests/engine/s18_movement_recovery.py
+```
+
+`s15` emits bounded transition/periodic timelines for both sequential logistics tasks. Each task's
+counter baseline is captured immediately before `task_start`; snapshots include deadline remaining,
+phase, movement owner/state, zone, path/callback/retry/recovery counters, sampled distance, builds,
+acquisition trips and terminal tick. At most 64 nonterminal samples plus the terminal sample are
+printed per task. `s21` uses the internal `movement_path_callback` diagnostic to deliver a stale
+request ID directly to the production callback handler. `s18` uses the one-shot
+`movement_save_on_recovery` diagnostic to save from the mod's normal tick order when persistent
+recovery metadata is present. None of `movement_path_callback`, `movement_save_on_recovery` or
+`movement_request` is an MCP tool.

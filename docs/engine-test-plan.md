@@ -257,3 +257,42 @@ Not selected and reasons:
   every old scenario would not exercise a changed interface.
 
 A skipped scenario is never recorded as PASS.
+
+
+## 11. Stage 7.1 movement and work-zone stabilization
+
+Use only the isolated `factorio-stage71-test` profile (`FACTORIO_RCON_PORT=27081`,
+`FACTORIO_GAME_PORT=27042`) and disposable copies of `s71-baseline.zip`/`s7-baseline.zip`.
+Routine runs use speed 60; timing-sensitive recovery/save windows use speed 1–5. Human multiplayer
+acceptance is a separate persistent server at speed 1 and starts only after automated success.
+
+Mandatory focused scenarios:
+
+- `s15` — sequential Stage-6 and Stage-7 `build_logistics`, all 17 checks and bounded per-task
+  timelines. The existing 108,000-tick construction-attempt deadline must not be increased to hide
+  recovery churn.
+- `s16` — construction/production persistence, cancellation/restart, safety and death after the
+  final movement changes.
+- `s18` — aligned and conflicting belts, ghost recovery, save/load during recovery, safety during
+  recovery and bounded unreachable routes.
+- `s17` — required because path request, callback and waypoint behavior changed.
+- `s21` — immediate sequential task restart, per-task scheduler isolation and stale callback
+  correlation.
+
+Affected movement/construction regressions: `s1`, `s2`, `s3`, `s3b`, `s5`, `s6`, `s8`, `s9`,
+`s10`, `s11`, `s12`. Safety/death scenarios are required even though their controllers were not
+rewritten, because movement ownership and interruption changed. `s19` and `s20` cover zone and
+movement-persistence contracts.
+
+Not selected, with reasons:
+
+- `s4`, `s4b` — Python RCON, bridge, MCP transport and restart handling are unchanged. Internal
+  diagnostics added to `control.lua` do not alter those transports.
+- `s7` — module format/catalog and their contracts are unchanged; paid module construction is
+  exercised by `s5`, `s15` and `s16`.
+- `s13`, `s14` — splitter/underground planning and geometry are unchanged; `s15` verifies all 14
+  routes, five splitters and the underground pair in the sequential shared world.
+
+A scenario not executed is recorded as SKIPPED with its reason, never as PASS. Final verification
+must also record Ruff, the complete Python unit suite, sole-`walking_state`-writer and
+production-teleport audits, archive/tree identity, and human multiplayer acceptance separately.

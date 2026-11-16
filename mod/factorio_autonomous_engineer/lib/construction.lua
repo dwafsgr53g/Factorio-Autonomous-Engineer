@@ -27,9 +27,12 @@ local TEST_PLANS = {
 
 function M.on_belt(surface, position)
   if not surface or not position then return false end
+  -- A belt still influences a character standing just off its centre (transport
+  -- belts are wider than the character), so use a small area overlap rather than
+  -- strict tile containment.
   local entities = surface.find_entities_filtered{
-    area = {{x = position.x - 0.35, y = position.y - 0.35},
-      {x = position.x + 0.35, y = position.y + 0.35}},
+    area = {{x = position.x - 0.45, y = position.y - 0.45},
+      {x = position.x + 0.45, y = position.y + 0.45}},
     type = {"transport-belt", "underground-belt", "splitter"},
   }
   for _, entity in pairs(entities) do
@@ -364,20 +367,69 @@ function M.approach_for_entity(surface, entity, agent)
   return candidates[1]
 end
 
+-- Reach probe: the engine's build-reach result evaluated from the character's
+-- actual current position. Factorio 2.1.24 does not treat the character's own
+-- collision as a blocker for ghost tiles, so this is a reach and collision test,
+-- not a "ghost tiles are free" test.
+function M.can_place_from(agent, ghost)
+  if not ghost or not ghost.valid then return false end
+  if not agent or not agent.valid then return false end
+  local ok, result = pcall(function()
+    return agent.can_place_entity{
+      name = ghost.ghost_name,
+      position = ghost.position,
+      direction = ghost.direction,
+      force = agent.force,
+      build_check_type = defines.build_check_type.ghost_revive,
+    }
+  end)
+  return ok and result == true
+end
+
+-- Live placement validation. This is the final authority before a paid build:
+-- it checks the character's actual reach, its own collision footprint, and every
+-- real collider in the ghost's footprint. It never treats Euclidean distance as
+-- proof that construction is possible.
+function M.validate_placement(agent, ghost)
+  if not ghost or not ghost.valid then return false, "ghost_gone" end
+  if not agent or not agent.valid then return false, "agent_unavailable" end
+  local reach_ok = M.can_place_from(agent, ghost)
+  local inside = agent.position.x > ghost.bounding_box.left_top.x - 0.15
+    and agent.position.x < ghost.bounding_box.right_bottom.x + 0.15
+    and agent.position.y > ghost.bounding_box.left_top.y - 0.15
+    and agent.position.y < ghost.bounding_box.right_bottom.y + 0.15
+  if inside then return false, "agent_inside_ghost" end
+  local clearable, blocking, players = M.obstacles(ghost, agent)
+  if #players > 0 then return false, "player_working" end
+  if #clearable > 0 then return false, "needs_clearing" end
+  if #blocking > 0 then return false, "blocked_by_existing_entity" end
+  if not reach_ok then return false, "out_of_reach" end
+  return true
+end
+
 function M.build(agent, ghost)
   if not ghost or not ghost.valid then return false, "ghost_gone" end
   if not agent or not agent.valid then return false, "agent_unavailable" end
-  if distance(agent.position, ghost.position) > BUILD_RANGE then return false, "out_of_reach" end
   local requirements, reason = M.requirements(ghost)
   if not requirements then return false, reason end
-  if not ghost.surface.can_place_entity{
-    name = ghost.ghost_name, position = ghost.position, direction = ghost.direction,
-    force = agent.force, build_check_type = defines.build_check_type.ghost_revive,
-  } then
-    return false, "blocked"
-  end
+  -- Reach is the last check and uses the live engine result from the character's
+  -- actual position. A ghost the character stands next to must still be payable:
+  -- Factorio does not treat the character's own footprint as a ghost blocker.
+  local reach_ok = M.can_place_from(agent, ghost)
   local paid, payment = M.consume(agent, requirements)
   if not paid then return false, payment or "missing_material" end
+  if not reach_ok then
+    -- Reach failed, but the engine's placement authority accepts the site from here
+    -- (verified below). Only a genuine blocker rejects the build.
+    local surface_ok = ghost.surface.can_place_entity{
+      name = ghost.ghost_name, position = ghost.position, direction = ghost.direction,
+      force = agent.force, build_check_type = defines.build_check_type.ghost_revive,
+    }
+    if not surface_ok then
+      M.refund(agent, payment)
+      return false, "blocked"
+    end
+  end
   local surface, ghost_name, ghost_position = ghost.surface, ghost.ghost_name, ghost.position
   local tags = ghost.tags
   local module_recipe = tags and tags.ae_recipe or nil
@@ -560,6 +612,8 @@ function M.plans()
   return names
 end
 
+-- Kept for diagnostics only. Production reach decisions use
+-- ``agent.build_distance`` plus the live ``can_place_entity`` result.
 function M.build_range()
   return BUILD_RANGE
 end

@@ -43,12 +43,91 @@ def output_gears(plan: dict, b: h.Bridge) -> int:
     return s6.output_chest_gears(plan, b)
 
 
+def wait_with_timeline(task_id: str, b: h.Bridge, *, timeout: float,
+                       baseline_stats: dict) -> dict:
+    """Capture bounded task transitions and counter deltas, never per-tick logs."""
+    snapshots: list[dict] = []
+    baseline: dict | None = baseline_stats
+    last_signature: tuple | None = None
+    last_sample_tick: int | None = None
+    truncated = 0
+    stat_names = (
+        "path_requests", "path_callbacks", "paths_received", "stale_path_callbacks",
+        "stale_callbacks", "try_again_later", "no_path", "path_timeouts", "replans",
+        "world_change_replans", "belt_recoveries", "ghost_recoveries", "recovery_resumes",
+        "distance_travelled",
+    )
+
+    def poll() -> dict | None:
+        nonlocal baseline, last_signature, last_sample_tick, truncated
+        status = h.task_status(task_id, b)
+        debug = h.task_debug(b)
+        request_id = debug.get("movement_request")
+        params = {"request_id": request_id} if request_id else {}
+        movement = b.call("movement_status", params)["result"]
+        current = movement.get("movement") or {}
+        stats = movement.get("stats") or {}
+        if baseline is None:
+            baseline = {name: stats.get(name, 0) for name in stat_names}
+        counters = {
+            name: round(stats.get(name, 0) - baseline.get(name, 0), 6)
+            for name in stat_names
+        }
+        counters["path_retries"] = sum(counters[name] for name in (
+            "try_again_later", "no_path", "path_timeouts", "replans",
+            "world_change_replans",
+        ))
+        tick = int(debug.get("current_tick") or 0)
+        snapshot = {
+            "task_id": task_id,
+            "tick": tick,
+            "task_start_tick": debug.get("started_tick"),
+            "task_deadline_tick": debug.get("deadline_tick"),
+            "deadline_remaining_ticks": debug.get("remaining_ticks"),
+            "phase": debug.get("phase"),
+            "movement_request_id": current.get("request_id") or request_id,
+            "movement_owner": current.get("owner"),
+            "movement_state": current.get("state"),
+            "work_zone_id": debug.get("active_zone"),
+            "zone_transitions": debug.get("zone_transitions", 0),
+            "construction_completed": status.get("built_by_agent", 0),
+            "material_acquisition_trips": status.get("acquisition_trips", 0),
+            "counters": counters,
+        }
+        terminal = status.get("status") in h.TERMINAL
+        if terminal:
+            snapshot["completion_or_timeout_tick"] = debug.get("finished_tick") or tick
+            snapshot["terminal_status"] = status.get("status")
+            snapshot["terminal_reason"] = status.get("reason")
+        signature = (
+            snapshot["phase"], snapshot["movement_request_id"],
+            snapshot["movement_state"], snapshot["work_zone_id"],
+            snapshot["construction_completed"], snapshot["material_acquisition_trips"],
+        )
+        periodic = last_sample_tick is None or tick - last_sample_tick >= 600
+        if terminal or signature != last_signature or periodic:
+            if len(snapshots) < 64 or terminal:
+                snapshots.append(snapshot)
+            else:
+                truncated += 1
+            last_signature = signature
+            last_sample_tick = tick
+        return status if terminal else None
+
+    result = h.wait(poll, timeout=timeout, interval=0.5, what=f"task {task_id}")
+    print("  bounded task timeline:", json.dumps({
+        "task_id": task_id, "samples": snapshots, "truncated_samples": truncated,
+    }, sort_keys=True))
+    return result
+
+
 def main() -> int:
     results: list[tuple[str, bool, str]] = []
     b, stage6_plan, stage6_details = s6.prepare("s15a-baseline.zip",
                                                 baseline="s7-baseline.zip")
+    stats6 = b.call("movement_status")["result"]["stats"]
     tid6 = s6.start_logistics(b)
-    task6 = h.wait_task(tid6, b, timeout=600)
+    task6 = wait_with_timeline(tid6, b, timeout=600, baseline_stats=stats6)
     f.check(results, "Stage-6 baseline succeeds before expansion",
             task6.get("status") == "succeeded", json.dumps(task6.get("reason")))
     stage6_physical = stage6_details["physical"]["physical"]
@@ -111,8 +190,9 @@ def main() -> int:
 
     h.clear_main_inventory(b)
     h.give_items(f.CONSTRUCTION_ITEMS, b)
+    stats7 = b.call("movement_status")["result"]["stats"]
     tid7 = f.start_expansion(b, plan7, physical7)
-    task7 = h.wait_task(tid7, b, timeout=700)
+    task7 = wait_with_timeline(tid7, b, timeout=700, baseline_stats=stats7)
     f.check(results, "Stage-7 multi-consumer expansion succeeds",
             task7.get("status") == "succeeded", json.dumps(task7.get("reason")))
     verify7 = h.logistics_verify(physical7["id"], b)

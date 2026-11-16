@@ -82,6 +82,21 @@ pipes, pumps, steam power, rail, circuits, loaders, logistic delivery, construct
 automatic deconstruction, autonomous coal mining and other planets. See
 [advanced-logistics.md](advanced-logistics.md).
 
+## Stage 7.1 - Movement recovery and work-zone stabilization
+
+Stage 7.1 adds a single Movement Controller for ordinary and emergency locomotion, correlated
+path callbacks, bounded belt/ghost recovery with original-target restoration, and save/load-safe
+movement intents. Construction uses per-task sequential work zones and floating positions that
+build every reachable ghost without per-ghost close approaches. Sequential logistics tasks retain
+their existing bounded game-tick deadline; recovery/path-request churn is fixed rather than hidden
+by a larger timeout.
+
+Implementation and focused automated coverage are present. Full targeted engine regression and
+human multiplayer acceptance remain explicit release gates; Stage 8 must not start until both are
+complete. See [movement.md](movement.md),
+[construction-work-scheduler.md](construction-work-scheduler.md) and
+[engine-test-plan.md](engine-test-plan.md).
+
 ## Next parity work
 
 - Add a general goal/plan executor and a stage/planet-aware capability registry.

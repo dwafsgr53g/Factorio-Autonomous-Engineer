@@ -9,6 +9,8 @@ local module_placer = require("lib.module_placer")
 local layout_planner = require("lib.layout_planner")
 local logistics = require("lib.logistics")
 local transport = require("lib.transport")
+local movement = require("lib.movement")
+local work_scheduler = require("lib.work_scheduler")
 
 local function state()
   storage.autonomous_engineer = storage.autonomous_engineer or {
@@ -232,7 +234,20 @@ operations.task_debug = function(s, p)
     scan_dirty = task.scan_dirty, last_scan_tick = task.last_scan_tick,
     route_invalid_since = task.route_invalid_since,
     verify_started_tick = task.verify_started_tick,
-    started_tick = task.started_tick}
+    started_tick = task.started_tick, finished_tick = task.finished_tick,
+    current_tick = game.tick, deadline_ticks = task.deadline_ticks,
+    deadline_tick = task.started_tick and task.deadline_ticks
+      and task.started_tick + task.deadline_ticks or nil,
+    remaining_ticks = task.started_tick and task.deadline_ticks
+      and task.started_tick + task.deadline_ticks - game.tick or nil,
+    movement_request = task.movement_request,
+    zone_transitions = task.zone_transitions or 0,
+    active_zone = task.active_zone, active_zone_position = task.active_zone_position,
+    active_zone_attempts = task.active_zone_attempts,
+    legacy_fallback = task.legacy_fallback,
+    initial_belt = task.initial_belt,
+    initial_belt_recovery = task.initial_belt_recovery,
+    work_plan = work_scheduler.plan_summary(task)}
 end
 operations.task_entries = function(s, p)
   local task = s.task
@@ -255,6 +270,65 @@ end
 operations.task_resume = function(s, p)
   assert(safety.is_safe(s), "Cannot resume while the safety controller is active")
   return tasks.resume(s, p.task_id)
+end
+
+-- Internal movement and construction-scheduling surface for the engine harness.
+-- These operations expose no coordinates to the model and are not MCP tools.
+operations.movement_status = function(s, p)
+  local detail = movement.detail(s)
+  local summary = movement.status(s, p and p.request_id)
+  return {ok = true, movement = summary, detail = detail,
+    stats = movement.stats(s)}
+end
+operations.movement_debug = function(s)
+  return {ok = true, detail = movement.detail(s)}
+end
+operations.movement_request = function(s, p)
+  assert(type(p.destination) == "table", "movement destination is required")
+  local request_id, reason = movement.request(s, {
+    owner = p.owner or "engine_test", purpose = p.purpose or "diagnostic",
+    destination = p.destination, arrival_tolerance = p.arrival_tolerance,
+  })
+  return {ok = request_id ~= nil, request_id = request_id, reason = reason}
+end
+operations.movement_path_callback = function(s, p)
+  movement.path_finished(s, {id = p.id, path = p.path,
+    try_again_later = p.try_again_later})
+  return {ok = true}
+end
+operations.movement_reset_stats = function(s)
+  movement.reset_stats(s)
+  return {ok = true}
+end
+operations.movement_save_on_recovery = function(s, p)
+  assert(type(p.save) == "string" and p.save:match("^[%w_%-]+$"), "invalid save name")
+  s.recovery_save, s.recovery_save_done = p.save, false
+  return {ok = true}
+end
+operations.construction_on_belt = function(s, p)
+  local agent = s.agent
+  local position = p and p.position or (agent and agent.position)
+  return {ok = true, on_belt = construction.on_belt(agent.surface, position),
+    position = position}
+end
+operations.construction_schedule = function(s, p)
+  assert(s.agent and s.agent.valid, "Agent is not alive")
+  local task = s.task
+  if not task or not task.entries then
+    return {ok = false, reason = "no_task"}
+  end
+  local selection, reason, plan = work_scheduler.select(s, task, s.agent)
+  if not selection then
+    return {ok = false, reason = reason,
+      zones = work_scheduler.plan_summary(task)}
+  end
+  return {ok = true, zone_id = selection.zone.id,
+    work_position = selection.position,
+    reach = selection.plan.reach, grid_size = selection.plan.grid_size,
+    coverage = selection.score.covered,
+    distance_from_agent = selection.score.distance_from_agent,
+    evaluation = selection.score,
+    zones = work_scheduler.plan_summary(task)}
 end
 
 -- Internal composite planner entry point used by the engine harness and by future
@@ -309,22 +383,38 @@ script.on_event(defines.events.on_tick, function()
   end
   safety.tick(s)
   tasks.tick(s)
+  if s.recovery_save then
+    local m = s.movement
+    local intent = m and m.primary and m.intents[m.primary]
+    if intent and intent.recovery then
+      local save = s.recovery_save
+      s.recovery_save, s.recovery_save_done = nil, true
+      game.tick_paused = true
+      game.server_save(save)
+    end
+  end
 end)
 script.on_event(defines.events.on_entity_damaged, function(event)
   safety.on_damaged(state(), event)
 end)
 script.on_event(defines.events.on_entity_died, function(event)
   local s = state()
+  movement.world_changed(s, event.entity)
   if lifecycle.on_died(s, event) then
     safety.on_agent_died(s, event)
     tasks.on_agent_died(s)
   end
 end)
+script.on_event(defines.events.on_built_entity, function(event)
+  movement.world_changed(state(), event.entity)
+end)
 script.on_event(defines.events.on_script_path_request_finished, function(event)
   local s = state()
+  -- The movement controller is the only consumer of path callbacks.
+  movement.path_finished(s, event)
   safety.path_finished(s, event)
-  tasks.path_finished(s, event)
 end)
+
 
 remote.add_interface("factorio_autonomous_engineer", {
   get_agent = function() return state().agent end,

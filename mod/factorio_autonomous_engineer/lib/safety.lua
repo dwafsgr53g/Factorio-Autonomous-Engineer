@@ -1,3 +1,5 @@
+local movement = require("lib.movement")
+
 local M = {}
 local ALERT_RADIUS = 32
 local HOME_RADIUS = 48
@@ -40,10 +42,15 @@ local function armed(agent)
   return guns and ammo and guns.get_item_count() > 0 and ammo.get_item_count() > 0
 end
 
-local function stop_ordinary_actions(agent)
-  agent.walking_state = {walking = false, direction = defines.direction.north}
-  agent.mining_state = {mining = false}
-  agent.shooting_state = {state = defines.shooting.not_shooting, position = agent.position}
+-- Safety is the highest priority movement intent. The emergency route itself is
+-- submitted to the movement controller; only this module's shooting/mine state is
+-- written here, because the movement controller does not own combat state.
+local function stop_ordinary_actions(s, agent)
+  movement.interrupt_primary(s, "safety")
+  if agent and agent.valid then
+    agent.mining_state = {mining = false}
+    agent.shooting_state = {state = defines.shooting.not_shooting, position = agent.position}
+  end
 end
 
 local function distance(a, b)
@@ -101,42 +108,37 @@ local function choose_escape(s, agent, enemy)
 end
 
 local function request_escape_path(s, agent, destination)
-  local ok, request_id = pcall(function()
-    return agent.surface.request_path({
-      bounding_box = agent.prototype.collision_box, collision_mask = agent.prototype.collision_mask,
-      start = agent.position, goal = destination, force = agent.force, radius = 2,
-      entity_to_ignore = agent, pathfind_flags = {prefer_straight_paths = true},
-    })
-  end)
-  if not ok or not request_id then
+  local request_id, reason = movement.emergency(s, {
+    owner = "safety", purpose = "evacuate", destination = destination,
+    arrival_tolerance = 3.0,
+  })
+  if not request_id then
     s.safety.path, s.safety.path_request = nil, nil
     s.safety.status, s.safety.last_path_failure_tick = "blocked", game.tick
+    s.safety.block_reason = reason
     return false
   end
-  s.safety.path_request, s.safety.path = request_id, nil
+  s.safety.movement_request, s.safety.path = request_id, nil
   s.safety.path_index, s.safety.path_requested_tick, s.safety.status = 1, game.tick, "pathing"
   return true
 end
 
 local function follow_escape_path(s, agent)
   local safety = s.safety
-  if not safety.path then return end
-  local waypoint = safety.path[safety.path_index]
-  while waypoint and distance(agent.position, waypoint.position) < 0.65 do
-    safety.path_index = safety.path_index + 1
-    waypoint = safety.path[safety.path_index]
+  if not safety.destination then return end
+  local status = movement.status(s)
+  if status.request_id and status.request_id ~= safety.movement_request then
+    safety.movement_request = status.request_id
   end
-  if waypoint then
-    local dx, dy = waypoint.position.x - agent.position.x, waypoint.position.y - agent.position.y
-    local angle = math.atan2(dx, -dy)
-    local direction = (math.floor(angle / (math.pi / 4) + 0.5) * 2) % 16
-    agent.walking_state = {walking = true, direction = direction}
-  else
-    agent.walking_state = {walking = false, direction = defines.direction.north}
-    if safety.destination and distance(agent.position, safety.destination) > 3 then
-      safety.path, safety.status = nil, "replanning"
-      safety.last_path_failure_tick = game.tick
+  if status.state == "arrived" then
+    if distance(agent.position, safety.destination) <= 3 then
+      safety.path, safety.path_index, safety.status = nil, 1, "safe"
+      return
     end
+  end
+  if status.state == "blocked" or status.state == "cancelled" then
+    safety.path, safety.path_index = nil, 1
+    safety.status = "replanning"
   end
 end
 
@@ -159,7 +161,7 @@ local function enter_emergency(s, agent, reason, enemy, event)
     s.task.target_ghost, s.task.target_obstacle, s.task.target_chest = nil, nil, nil
     s.task.approach, s.task.path_index, s.task.missing_for_target = nil, nil, nil
   end
-  stop_ordinary_actions(agent)
+  stop_ordinary_actions(s, agent)
   append_event(s, "agent_under_attack", {
     reason = reason, health = agent.health, max_health = agent.max_health,
     position = agent.position, cause = s.safety.cause, source = s.safety.source,
@@ -230,6 +232,7 @@ function M.tick(s)
 
   safety = s.safety
   if not safety or not safety.active then return end
+  movement.tick(s)
   local enemies = {}
   for _, candidate in pairs(safety.nearby_enemies or {}) do
     if candidate and candidate.valid then enemies[#enemies + 1] = candidate end
@@ -260,7 +263,9 @@ function M.tick(s)
   local arrived = safety.destination and distance(agent.position, safety.destination) <= 3
   if arrived and #enemies == 0 then
     safety.active, safety.status = false, "safe"
-    stop_ordinary_actions(agent)
+    movement.release_emergency(s, safety.movement_request)
+    safety.movement_request = nil
+    stop_ordinary_actions(s, agent)
     append_event(s, "emergency_resolved", {
       health = agent.health, position = agent.position,
       destination_kind = safety.destination_kind,
