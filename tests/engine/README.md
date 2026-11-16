@@ -56,7 +56,7 @@ scenarios never inherit each other's state.
 | `s9_belt_routing.py` | Stage 6 A: real belt routing/turns, unique tiles, engine belt connections, ore/coal on transport lines, blocked route endpoints, missing materials, cancellation and no transport-line mutation API in production |
 | `s10_inserters.py` | Stage 6 B: six inserter roles and pickup directions, real pickup/drop targets, ore/plate movement, coal consumption, full output chest back-pressure and engine-driven resume |
 | `s11_power_distribution.py` | Stage 6 C: missing power source, pole coverage, legal wire reach, preserved player wiring, real network membership and unpowered detection after supply removal |
-| `s12_gear_production.py` | Stage 6 D: full ore→plate→gear production over ticks, exact paid costs, save/load during construction/material collection/monitoring, safety/death interruption, empty coal chest, player route conflict, distant-player planning, one-trip batch material acquisition, walk-out from a pending ghost and walk-off a working belt |
+| `s12_gear_production.py` | Stage 6 D: full ore→plate→gear production over ticks, exact paid costs, save/load during construction/material collection/monitoring, safety/death interruption, empty coal chest, player route conflict, distant-player planning, one-trip batch material acquisition, walk-out from a pending ghost and walk-off a working belt; scenario L resumes while the character stands inside a pending module ghost and asserts a bounded recovery (no request storm) |
 | `s13_splitter_networks.py` | Stage 7 A: one-to-two splitting, two-to-one merging, both consumers supplied, common output, splitter type/direction/connectors, blocked branch preservation, full-output back-pressure, depleted fuel and no transport-line mutation |
 | `s14_underground_belts.py` | Stage 7 B: live yellow-belt reach, min/max distance, over-range rejection, splitter geometry, reciprocal underground neighbours, paid pair construction and coal transfer, player-owned endpoint protection |
 | `s15_multi_consumer_expansion.py` | Stage 7 C: working Stage-6 chain plus parallel multi-consumer cell, both factories operational, unchanged old units, all 14 routes/splitters/underground pair connected, merged gear output |
@@ -149,9 +149,14 @@ windows at speed 1–5.
 
 ```
 FACTORIO_TEST_DIR="$PWD/.runtime/factorio-stage71-test" FACTORIO_RCON_PASSWORD=... \
-FACTORIO_RCON_PORT=27081 FACTORIO_GAME_PORT=27042 FACTORIO_GAME_SPEED=60 \
+FACTORIO_RCON_PORT=27079 FACTORIO_GAME_PORT=27040 FACTORIO_GAME_SPEED=60 \
   uv run python tests/engine/s18_movement_recovery.py
 ```
+
+`s18` scenario E (safety pre-empting an active belt recovery) is a known pre-existing flake: a run
+can exceed the 120 s wall-clock wait while the character crosses a dense belt field toward the
+escape point. The same failure rate was reproduced on the pre-stabilization checkpoint. A failing
+run is recorded as FAIL and never reported as PASS.
 
 `s15` emits bounded transition/periodic timelines for both sequential logistics tasks. Each task's
 counter baseline is captured immediately before `task_start`; snapshots include deadline remaining,

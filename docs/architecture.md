@@ -136,9 +136,18 @@ ordinary tasks, and terminal tasks release their primary intent before a replace
 
 Belt recovery requires an actual direction conflict or observed undesired displacement. An aligned
 belt ride is valid: callback alignment skips waypoints already reached and compares against the next
-effective waypoint. Recovery preserves the original target, walks to a verified non-belt position,
-then requests a fresh path. Save/load restores that original target before discarding transient path
-state. See [movement.md](movement.md).
+effective waypoint. Recovery preserves the original target, walks to a verified non-belt position
+with a belt-free margin larger than the pathfinder goal radius, then requests a fresh path. Repeated
+step-offs that do not shorten the route are replaced by an ordinary belt crossing, so a belt field
+cannot cause an unbounded recovery loop. Save/load restores that original target before discarding
+transient path state.
+
+An empty path returned from a position the engine reports as non-placeable (a belt can carry the
+character into a clipped spot) starts a bounded `invalid_position` step-out instead of marking the
+destination unreachable. Tasks hand an inside-ghost step-out to the controller and wait in phase
+`recovering`; they never cancel the recovery and re-target the same approach point. Module approach
+rings start outside the footprint so an ordinary arrival cannot end inside it. See
+[movement.md](movement.md).
 
 `lib/work_scheduler.lua` partitions each task's existing ghost ledger into zones derived from live
 `build_distance`. A floating work position covers as many reachable ghosts as possible, and the paid

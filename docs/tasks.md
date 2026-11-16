@@ -42,7 +42,7 @@ The executor owns the complete construction cycle:
 6. Compute the exact item/quality requirement from `item_requests` or, for script-created ghosts, the entity prototype's `items_to_place_this`.
 7. If materials are missing, find an ordinary accessible chest inside the work area whose contents include them, walk to it, and transfer only the still-missing items. No chest marker or reservation exists.
 8. Verify capacity and actual counts. Return any uninserted remainder to the chest immediately.
-9. Walk to the ghost's ring approach position and place only after the ghost still exists, the position is valid, the player is not working there and the full cost is present.
+9. Walk to the ghost's ring approach position (outside the footprint by the target's half extent plus 1.5 tiles) and place only after the ghost still exists, the position is valid, the player is not working there and the full cost is present. If the character is still inside the target footprint, the task asks the Movement Controller for a bounded ghost step-out, waits in phase `recovering`, and retries the ghost afterwards; it never cancels a recovery and re-targets the same approach point.
 10. Consume exactly the required stacks, call `revive()` in the same tick, verify the real entity, and record the ghost as built. A failed revive refunds the exact stacks.
 11. Reconcile again after every build/clear/transfer. A cancelled ghost is never recreated by the same task. A short settle re-scan precedes successful completion.
 12. Return one compact result. No waypoints, inventory indices, entity handles or coordinates are exposed to the model.
@@ -109,7 +109,10 @@ deadline is not reset on ordinary phase transitions. Verification has separate b
 fuel and production-monitoring windows inside the task budget. An explicit strategic resume starts
 a fresh bounded attempt; save/load alone does not reset it.
 
-Movement/path waiting and construction execution both consume this in-game budget. The Python
+Recovery is bounded per movement intent. Belt recoveries that do not shorten the route are replaced
+by an ordinary belt crossing after three attempts, and an empty path from a non-placeable character
+position starts a bounded `invalid_position` step-out instead of spending the budget re-requesting the
+same route. Movement/path waiting and construction execution both consume this in-game budget. The Python
 `TaskRunner` wall-clock timeout is a separate transport/caller safeguard and is not added to the
 Factorio deadline. Stage 7.1 keeps the existing logistics budget: sequential deadline failures were
 caused by repeated recovery/path-request churn, not by legitimate work volume.

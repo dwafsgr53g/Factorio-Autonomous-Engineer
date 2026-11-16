@@ -261,8 +261,8 @@ A skipped scenario is never recorded as PASS.
 
 ## 11. Stage 7.1 movement and work-zone stabilization
 
-Use only the isolated `factorio-stage71-test` profile (`FACTORIO_RCON_PORT=27081`,
-`FACTORIO_GAME_PORT=27042`) and disposable copies of `s71-baseline.zip`/`s7-baseline.zip`.
+Use only the isolated `factorio-stage71-test` profile (`FACTORIO_RCON_PORT=27079`,
+`FACTORIO_GAME_PORT=27040`) and disposable copies of `s71-baseline.zip`/`s7-baseline.zip`.
 Routine runs use speed 60; timing-sensitive recovery/save windows use speed 1–5. Human multiplayer
 acceptance is a separate persistent server at speed 1 and starts only after automated success.
 
@@ -282,7 +282,21 @@ Mandatory focused scenarios:
 Affected movement/construction regressions: `s1`, `s2`, `s3`, `s3b`, `s5`, `s6`, `s8`, `s9`,
 `s10`, `s11`, `s12`. Safety/death scenarios are required even though their controllers were not
 rewritten, because movement ownership and interruption changed. `s19` and `s20` cover zone and
-movement-persistence contracts.
+movement-persistence contracts. `s13` and `s14` are run as well: splitters and underground belts
+share belt approach/step-off behavior even when their planning code is unchanged.
+
+`tests/engine/s12_gear_production.py` scenario L is the deterministic regression for the
+resume-inside-a-module-ghost defect: after a death and respawn the character is placed inside a
+pending module ghost, then the task is resumed. It must complete with at most 8 ghost/position
+recoveries and at most 60 path requests. Scenario K asserts a recorded normal-walking belt step-off
+(no teleport), and scenario B compares post-load build progress with the pre-save count instead of a
+fixed number.
+
+Known pre-existing flake (recorded, not hidden): `s18` scenario E (safety pre-empts an active belt
+recovery) occasionally exceeds its 120 s wall-clock wait at speed 60 while the character crosses a
+dense belt field on the way to the escape point. The same failure was reproduced on the
+pre-stabilization checkpoint (`wip` commit) at the same rate, so it is not caused by the
+stabilization changes. A failing run must be recorded as FAIL; it is never reported as PASS.
 
 Not selected, with reasons:
 

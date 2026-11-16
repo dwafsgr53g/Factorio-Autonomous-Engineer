@@ -91,9 +91,16 @@ build every reachable ghost without per-ghost close approaches. Sequential logis
 their existing bounded game-tick deadline; recovery/path-request churn is fixed rather than hidden
 by a larger timeout.
 
-Implementation and focused automated coverage are present. Full targeted engine regression and
-human multiplayer acceptance remain explicit release gates; Stage 8 must not start until both are
-complete. See [movement.md](movement.md),
+Implementation and automated coverage are present. Stabilization added an inside-ghost step-out
+hand-off, approach rings outside the target footprint, a belt-free margin and progress bound for belt
+step-offs, and bounded recovery from non-placeable character positions. The original 108,000-tick
+logistics deadline and the 25,200-tick construction deadline are unchanged.
+
+Release gates still open: `s18` scenario E is a known pre-existing flake (safety evacuation across a
+dense belt field occasionally exceeds the scenario's wall-clock wait; reproduced on the
+pre-stabilization checkpoint), so the automated engine suite is not reported as fully green yet.
+Human multiplayer acceptance has not started because it must follow a green automated run. Stage 8
+must not start. See [movement.md](movement.md),
 [construction-work-scheduler.md](construction-work-scheduler.md) and
 [engine-test-plan.md](engine-test-plan.md).
 

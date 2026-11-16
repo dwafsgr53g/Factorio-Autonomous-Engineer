@@ -18,4 +18,12 @@ The mod stores compact events such as agent_under_attack, emergency_resolved, ag
 
 ## Never trust the model for survival
 
+Belt recovery is bounded per intent, so an evacuation that crosses a dense belt field cannot be
+blocked by unbounded step-offs: after three step-offs that do not shorten the route the controller
+walks across the belt and lets the progress detector decide. Recovery also covers a non-placeable
+character position (a belt can carry the character into a clipped spot) with a bounded walk-out, so
+an empty path result no longer strands an evacuation. Scenario `s18 E` exercises safety pre-empting
+an active belt recovery and is a known pre-existing flake at the scenario's wall-clock wait; a
+failing run is reported as FAIL, never as PASS.
+
 No LLM decision is required for evasive movement, defensive fire, cancelling work, respawn, or inventory recovery. Thresholds are constants in lib/safety.lua and require engine testing.

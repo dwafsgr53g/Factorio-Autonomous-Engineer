@@ -24,6 +24,13 @@ position. It does not walk close to each ghost when several are reachable from o
 Unreachable or blocked positions are rejected and another candidate is tried, with bounded fallback
 to the legacy target/clearing/acquisition path.
 
+The legacy per-target path (used for plan modules and as fallback) walks to an approach point from
+`construction.approach_for_entity`. That ring starts at the target's half extent plus 1.5 tiles
+(never closer than 2.6) so the character cannot stop inside the module footprint. If the character
+still ends up inside a target ghost, the executor delegates a bounded ghost step-out to the Movement
+Controller and waits in phase `recovering`; it never cancels the recovery and re-targets the same
+inside-footprint approach point.
+
 ## Task isolation and persistence
 
 The active plan is stored at `task.work_plan`. A newly started task receives a new plan, zone order,

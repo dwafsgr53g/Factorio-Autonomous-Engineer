@@ -33,11 +33,30 @@ Standing on a belt is not itself a recovery condition.
   valid progress and ordinary belt crossings are not recovery events.
 
 A belt recovery selects a bounded, collision-free destination that is not on another belt, is outside
-construction ghosts and is not occupied by another character. The original destination, target
-entity and arrival tolerance are saved. The controller walks to the step-off destination through a
-new pathfinder request, verifies the character's actual position is no longer on a belt, restores the
-original target and requests a fresh path. Arrival tolerance alone cannot complete recovery while
-the character is still on a belt. Retry and replan counts are bounded; recovery never teleports.
+construction ghosts and is not occupied by another character. The step-off destination keeps a
+1.2-tile belt-free margin, because a path request only has to deliver the character within one tile of
+its goal: without that margin the returned path can end on another belt tile and the step-off could
+never complete. The original destination, target entity and arrival tolerance are saved. The
+controller walks to the step-off destination through a new pathfinder request, verifies the
+character's actual position is no longer on a belt, restores the original target and requests a fresh
+path. Arrival tolerance alone cannot complete recovery while the character is still on a belt.
+
+Repeated step-offs are bounded by progress, not only by a counter. Each intent compares the remaining
+distance at the start of a belt recovery with the previous one; after three recoveries that did not
+shorten the route by at least a tile, the controller stops stepping off and follows the ordinary
+route across the belt. A larger belt field can then be crossed instead of being re-entered forever.
+Retry and replan counts are bounded; recovery never teleports.
+
+## Invalid-position recovery
+
+A belt can carry a character into a position whose collision box clips a belt tile. The engine still
+lets the character walk, but the pathfinder refuses to plan from a non-placeable start and returns an
+empty path. The controller detects that case through the engine's nearest free character position
+(`can_place_entity{name = "character"}` cannot be used: the character's own body occupies its
+position). An empty path from such a position starts a bounded `invalid_position` step-out instead of
+counting the destination as unreachable; the character walks toward the engine's nearest free
+position and then re-requests the original route. This is a normal-walking recovery with the same
+bounded attempt count as the other recovery reasons.
 
 ## Ghost recovery
 
@@ -46,6 +65,13 @@ path request merely because one overlaps the character. The Movement Controller 
 route start or an actual progress stall, and construction can explicitly request a step-out when a
 large module footprint must be cleared before revival. Step-outs use normal walking and restore the
 original target before routing resumes.
+
+When the executor finds the character inside the target ghost footprint, it must hand the step-out to
+the controller (`movement.recover`, then task phase `recovering`) and wait for it. Stopping movement
+and re-targeting the same approach point every tick cancels the recovery before it can move, which
+was observed as a ghost-recovery/path-request storm that ended only at the task deadline. The
+approach ring in `construction.approach_for_entity` starts at `footprint_half_extent + 1.5` (never
+below 2.6), so an ordinary arrival cannot leave the character inside the target footprint.
 
 ## Save/load and diagnostics
 
