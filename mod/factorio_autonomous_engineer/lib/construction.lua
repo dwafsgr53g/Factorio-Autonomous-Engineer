@@ -339,8 +339,13 @@ function M.approach_for_entity(surface, entity, agent)
     math.abs(box.left_top.y - entity.position.y),
     math.abs(box.right_bottom.y - entity.position.y)
   )
+  -- The movement controller accepts a path once it is within its pathfinder goal
+  -- tolerance, so the ring must start far enough out that the character cannot stop
+  -- inside the target footprint. Otherwise a 2x2/3x3 module is re-targeted from
+  -- inside its own footprint forever (each attempt is refused as agent_inside_ghost).
+  local ring = math.max(2.6, half + 1.5)
   local candidates = {}
-  for radius = math.max(2.0, half + 1.0), math.max(2.0, half + 1.0) + 4, 0.5 do
+  for radius = ring, ring + 4, 0.5 do
     local steps = 24
     for index = 0, steps - 1 do
       local angle = index * (2 * math.pi / steps)

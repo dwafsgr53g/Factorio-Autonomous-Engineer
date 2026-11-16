@@ -922,10 +922,27 @@ local function try_build_target(s, task, agent)
   end
   if position_inside_box(agent.position, ghost.bounding_box) then
     -- A 2x2/3x3 ghost can contain the character if it stopped just short of its
-    -- approach point. Walk out first; do not misreport the character as a blocker.
+    -- approach point or respawned inside the plan. Hand the step-out to the single
+    -- movement owner and wait for it: cancelling the recovery and re-targeting the
+    -- same approach point every tick makes recovery impossible and only ends at the
+    -- task deadline (observed as a ghost-recovery/path-request storm).
     entry.status, entry.reason = "pending", "agent_inside_ghost"
-    stop_character(s)
     clear_target(task)
+    local ok, request_id = movement.recover(s, task.id, "ghost")
+    if ok then
+      task.movement_request = request_id
+      task.movement_recovery = true
+      task.movement_kind = "step_out"
+      task.phase, task.phase_started_tick = "recovering", game.tick
+      return
+    end
+    task.step_out_attempts = (task.step_out_attempts or 0) + 1
+    if (task.step_out_attempts or 0) > 4 then
+      task.status, task.pause_reason = "paused", "movement_recovery_failed"
+      return
+    end
+    stop_character(s)
+    task.phase, task.phase_started_tick = "search", game.tick
     return
   end
   local ok, reason, entity, proxy = construction.build(agent, ghost)

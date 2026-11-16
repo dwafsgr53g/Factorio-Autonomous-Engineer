@@ -24,6 +24,10 @@ local PROGRESS_SAMPLE_LIMIT = 48
 local BELT_GRACE_TICKS = 4
 local GHOST_GRACE_TICKS = 3
 local RECOVERY_LIMIT = 3
+-- A belt step-off that does not shorten the route is repeated at most this many
+-- times; afterwards the controller walks across the belt instead, which is normal
+-- and lets the progress-based stuck detector decide whether it is a real conflict.
+local BELT_STALL_LIMIT = 3
 local RECOVERY_WAIT_TICKS = 60
 local OCCUPIED_LIMIT = 3
 local REPLAN_LIMIT = 4
@@ -142,6 +146,25 @@ local function other_character_near(agent, position, radius)
   return nil
 end
 
+-- A belt can carry a character into a position whose collision box clips the
+-- belt's own box. The engine still lets the character walk, but the pathfinder
+-- refuses to plan from a non-placeable start and returns an empty path, so a
+-- route would otherwise look permanently unreachable. This probe lets the
+-- controller step out before giving up on a target.
+--
+-- ``can_place_entity{name = "character"}`` cannot be used here: the character's
+-- own body blocks its own position. The engine's nearest free position is used
+-- instead, which returns the current position when it is already walkable.
+local function character_position_is_free(agent)
+  if not agent or not agent.valid then return false end
+  local ok, free = pcall(function()
+    return agent.surface.find_non_colliding_position(
+      "character", agent.position, 1.0, 0.05)
+  end)
+  if not ok or not free then return false end
+  return distance(free, agent.position) < 0.2
+end
+
 local function state()
   local s = storage.autonomous_engineer
   s.movement = s.movement or {
@@ -230,6 +253,25 @@ local function clear_path_request(movement)
   movement.path_request = nil
 end
 
+-- A path request only has to deliver the character within one tile of its goal.
+-- A belt step-off target therefore needs a belt-free margin of more than that, or
+-- the returned path can end on another belt tile and the step-off can never
+-- complete.
+local BELT_STEP_OFF_CLEARANCE = 1.2
+
+local function near_belt(surface, position, clearance)
+  if not surface or not position then return false end
+  local belts = surface.find_entities_filtered{
+    area = {{x = position.x - clearance, y = position.y - clearance},
+      {x = position.x + clearance, y = position.y + clearance}},
+    type = {"transport-belt", "underground-belt", "splitter"},
+  }
+  for _, belt in pairs(belts) do
+    if belt.valid then return true, belt end
+  end
+  return false, nil
+end
+
 local function find_safe_recovery_position(surface, agent, kind)
   if not surface or not agent or not agent.valid then return nil end
   local start = agent.position
@@ -240,7 +282,7 @@ local function find_safe_recovery_position(surface, agent, kind)
         x = start.x + math.cos(angle) * radius,
         y = start.y + math.sin(angle) * radius,
       }
-      local belt = on_belt(surface, candidate)
+      local belt = near_belt(surface, candidate, BELT_STEP_OFF_CLEARANCE)
       local ghost = inside_ghost(surface, candidate)
       local occupied = other_character_near(agent, candidate, 0.8)
       if not belt and not ghost and not occupied
@@ -411,6 +453,26 @@ local function best_step_direction(surface, agent, goal)
   return best
 end
 
+local function belt_recovery_useful(movement, intent, agent)
+  -- A step-off that does not shorten the route is repeated at most BELT_STALL_LIMIT
+  -- times. Afterwards the controller crosses the belt with the normal route, which
+  -- is harmless and lets the progress-based stuck detector decide.
+  local remaining = intent.destination and distance(agent.position, intent.destination)
+    or math.huge
+  local previous = intent.belt_recovery_distance
+  intent.belt_recovery_distance = remaining
+  if previous and remaining > previous - 1.0 then
+    intent.belt_stall_count = (intent.belt_stall_count or 0) + 1
+  else
+    intent.belt_stall_count = 0
+  end
+  if (intent.belt_stall_count or 0) >= BELT_STALL_LIMIT then
+    bump_stat(movement, "belt_steps_skipped")
+    return false
+  end
+  return true
+end
+
 local function enter_recovery(movement, intent, agent, kind)
   if not agent or not agent.valid then return false end
   local goal
@@ -442,7 +504,19 @@ local function enter_recovery(movement, intent, agent, kind)
     bump_stat(movement, "belt_recoveries")
     return true
   end
-  local direction = best_step_direction(agent.surface, agent, goal)
+  local direction
+  if kind == "position" then
+    -- Walk toward the engine's nearest free position instead of any of the eight
+    -- probe directions: inside a belt block most directions stay non-placeable for
+    -- the whole step-out window.
+    local ok, free = pcall(function()
+      return agent.surface.find_non_colliding_position("character", agent.position, 8, 0.1)
+    end)
+    if ok and free and distance(free, agent.position) > 0.1 then
+      direction = direction_toward(agent.position, free)
+    end
+  end
+  if not direction then direction = best_step_direction(agent.surface, agent, goal) end
   if not direction then
     intent.recovery_count = (intent.recovery_count or 0) + 1
     if intent.recovery_count > RECOVERY_LIMIT then
@@ -467,9 +541,11 @@ local function enter_recovery(movement, intent, agent, kind)
   intent.step_out_until = game.tick + 90
   intent.step_out_kind = kind
   intent.state = "recovering"
-  intent.reason = kind == "belt" and "belt_displacement" or "ghost_obstruction"
+  intent.reason = kind == "belt" and "belt_displacement"
+    or kind == "ghost" and "ghost_obstruction" or "invalid_position"
   intent.last_progress_tick = game.tick
-  bump_stat(movement, kind == "belt" and "belt_recoveries" or "ghost_recoveries")
+  bump_stat(movement, kind == "belt" and "belt_recoveries"
+    or kind == "ghost" and "ghost_recoveries" or "position_recoveries")
   return true
 end
 
@@ -805,6 +881,7 @@ local function tick_intent(movement, intent, agent)
     local kind = intent.step_out_kind or "step_out"
     local on = (kind == "belt") and on_belt(agent.surface, agent.position)
       or (kind == "ghost") and inside_ghost(agent.surface, agent.position)
+      or (kind == "position") and not character_position_is_free(agent)
     if intent.step_out_until and game.tick < intent.step_out_until then
       if on then
         agent.walking_state = {walking = true, direction = intent.step_out_direction}
@@ -866,12 +943,12 @@ local function tick_intent(movement, intent, agent)
     -- Recovery is reserved for a direction conflict or observed displacement.
     local _, belt = on_belt(agent.surface, agent.position)
     if belt and not belt_aligned(agent, intent, belt)
-      and not intent.recovery and game.tick >= (intent.recovery_blocked_until or 0) then
-      if enter_recovery(movement, intent, agent, "belt") then
-        clear_path_request(movement)
-        stop_walking(agent, movement)
-        return
-      end
+      and not intent.recovery and game.tick >= (intent.recovery_blocked_until or 0)
+      and belt_recovery_useful(movement, intent, agent)
+      and enter_recovery(movement, intent, agent, "belt") then
+      clear_path_request(movement)
+      stop_walking(agent, movement)
+      return
     end
     -- A route that starts from inside a construction ghost is recovered before the
     -- path request. Walking through ghosts during a route is normal and handled by
@@ -1146,6 +1223,19 @@ function M.path_finished(s, event)
   end
   local path = event.path
   if not path or #path == 0 then
+    -- An empty path from a position the engine considers non-placeable is a
+    -- recoverable condition, not an unreachable destination: step out and retry
+    -- instead of counting the target as unreachable.
+    local mover = s.agent
+    if mover and mover.valid and not character_position_is_free(mover)
+      and not (intent.recovery and intent.recovery.kind == "position") then
+      bump_stat(movement, "no_path_invalid_position")
+      if enter_recovery(movement, intent, mover, "position") then
+        clear_path_request(movement)
+        stop_walking(mover, movement)
+        return
+      end
+    end
     intent.no_path_count = (intent.no_path_count or 0) + 1
     bump_stat(movement, "no_path")
     if intent.no_path_count > NO_PATH_RETRY_LIMIT then
@@ -1178,7 +1268,7 @@ function M.path_finished(s, event)
   end
   next_position = next_position or intent.destination
   if arrival_belt and not belt_aligned(agent, intent, arrival_belt, next_position)
-    and not intent.recovery then
+    and not intent.recovery and belt_recovery_useful(movement, intent, agent) then
     if enter_recovery(movement, intent, agent, "belt") then
       clear_path_request(movement)
       stop_walking(agent, movement)
