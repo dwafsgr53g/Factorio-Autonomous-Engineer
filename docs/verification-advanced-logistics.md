@@ -181,9 +181,79 @@ waits; those scenarios are documented at speed 1 and passed at speed 1.
 
 ## Human multiplayer acceptance
 
-Pending the mandatory checkpoint. This section will record the isolated Stage-7 server,
-real player join, preserved Stage-6 baseline, applied expansion, actual item movement and
-the observed player interaction. Synthetic characters were not used.
+The isolated Stage-7 server was started from a consistent copy of the Stage-6 human save.
+The Stage-5 and Stage-6 servers/worlds were not restarted or modified.
+
+| Item | Value |
+| --- | --- |
+| Server name | `AE Stage 7 Advanced Logistics Test` |
+| Game port | `27040` (UDP) |
+| Address | `192.168.31.179:27040` (loopback `127.0.0.1:27040`) |
+| RCON | `127.0.0.1:27079`, loopback only, password held in the runtime environment |
+| Game speed | 1 |
+| Real player | `emerge.f`, character unit 10, `connected = true` |
+| Agent | separate character entity, unit 1 |
+| Client/server mods | matched: base, elevated-rails, factorio_autonomous_engineer, planet-express, quality, recycler, space-age |
+| Synthetic players | none |
+
+### Preserved Stage-6 baseline
+
+Before expansion the world contained the working Stage-6 chain and reported
+`operational`. Its output chest held 493 iron gear wheels. A 31-entity real-entity
+snapshot was recorded outside the new cell. After the Stage-7 cell was built:
+
+- all Stage-6 production units (drill, furnace, assembler, belts, inserters, poles,
+  chests) were still present and unchanged in position;
+- the Stage-6 logistics verification remained `operational` with 493 gears;
+- one pre-existing accumulator (unit 8 at `15,-36`) was replaced by a new accumulator
+  (unit 1404 at `15,-37`). The agent's production code does not destroy real
+  buildings; this was recorded as a player/world change, not as agent preservation.
+
+### Applied Stage-7 expansion
+
+The player moved outside the planned work area, then the multi-consumer plan was applied
+and the composite task ran:
+
+| Result | Value |
+| --- | --- |
+| Task | `build_logistics`, `mode="multi_consumer"` |
+| Status | `succeeded` / `multi_consumer_production_observed` |
+| Ghosts | 80 built, 0 remaining |
+| Materials | 80 items transferred from an ordinary chest in 2 trips |
+| Routes | 14/14 engine-connected; 0 blocked |
+| Splitters | 5 real splitters, all verified |
+| Underground | one pair, distance 2, south, reciprocal neighbours |
+| Consumers | ore 2/2, fuel 2/2, plate 2/2, gear 2/2 |
+| Production | both furnaces and both assemblers increased `products_finished` |
+| Output | common chest gained real gear wheels |
+| Power | connected |
+| Fuel | delivered; source chest later reached 0 while furnaces still burned |
+
+### Real observed flow over ticks
+
+| Sample | Furnace 1 plates | Furnace 2 plates | Assembler 1 gears | Assembler 2 gears | Common chest |
+| --- | --- | --- | --- | --- | --- |
+| start | 65 | 65 | 31 | 31 | 58 |
+| +60 s | 84 | 84 | 40 | 40 | 77 |
+| +120 s | 103 | 103 | 50 | 50 | 96 |
+| +146 s | 111 | 111 | 53 | 54 | 104 |
+| post-interaction | 235 | 235 | 116 | 116 | 12 |
+| +40 s after withdrawal | 248 | 248 | 122 | 122 | 28 |
+
+### Player interaction
+
+The real player withdrew iron gear wheels from the new common output chest. Their main
+inventory then held 222 gear wheels, and the chest dropped to 12. The output chest
+refilled through the engine to 28 within 40 seconds while both assemblers continued
+producing (`116 → 122` and `116 → 122`). `logistics_verify` remained `operational`;
+the Stage-6 chest still held 493 gears.
+
+The fuel source chest reached 0 during the long observation. The furnaces still had
+burning fuel at the last check, so the network continued running; once that fuel is
+exhausted the existing verification will honestly report `missing_fuel_source`.
+
+The Stage-7 server was left running at `game.speed = 1` after acceptance for inspection.
+No synthetic player was used.
 
 ## Known limitations
 
