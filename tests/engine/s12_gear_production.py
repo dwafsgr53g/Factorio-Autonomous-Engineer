@@ -75,8 +75,15 @@ def scenario_b() -> None:
     check("the task id survives", after.get("task_id") == task_id, h.pretty(after)[:300])
     check("the task is still running after load", after.get("status") == "running",
           after.get("status"))
-    check("built progress survives", after.get("built_by_agent", 0) >= 3,
-          h.pretty(after)[:300])
+    # Progress must survive the save/load: no completed build may be lost. The exact
+    # count at the save tick depends on the scheduler's build order, so it is compared
+    # with the pre-save status instead of a fixed number.
+    check("built progress survives",
+          after.get("built_by_agent", 0) >= before.get("built_by_agent", 0)
+          and after.get("built_by_agent", 0) > 0,
+          h.pretty({"before": before.get("built_by_agent"),
+                    "after": after.get("built_by_agent"),
+                    "status": after.get("status")}))
     result = h.wait_task(task_id, b, timeout=180)
     print("  final:", h.pretty(result)[:700])
     check("the chain completes after reload", result.get("status") == "succeeded",
@@ -338,19 +345,35 @@ def scenario_j() -> None:
         f"a.teleport({{x={target['position']['x']}, y={target['position']['y']}}}) return ''",
         b)
     h.lua("game.tick_paused = false", b)
-    h.wait(lambda: (h.status(b)["task"].get("step_out_count", 0) >= 1
-                    or h.status(b)["task"].get("status") in
-                    {"succeeded", "failed", "blocked", "partial"}),
-           timeout=120, interval=0.2, what="step out of ghost")
+    h.wait(lambda: h.status(b)["task"].get("status") in
+           {"succeeded", "failed", "blocked", "partial"},
+           timeout=180, interval=0.2, what="task terminal after ghost teleport")
     f.set_speed(b, 60)
     result = h.wait_task(task_id, b, timeout=180)
     print("  final:", h.pretty(result)[:900])
     check("the task recovers and completes after being inside a ghost",
           result.get("status") == "succeeded", result.get("reason"))
-    check("at least one normal walk-out from the ghost was recorded",
-          result.get("step_out_count", 0) >= 1,
-          h.pretty({"step_out": result.get("step_out_count"),
-                    "teleports": result.get("step_out_teleports")}))
+    # Stage 7.1 only steps out of a ghost on an actual conflict; while a valid route
+    # exists the character simply walks out. The observable contract is that the
+    # character ends outside the built module footprint and the module exists in
+    # place, with no teleport and no destroyed ghost.
+    inside_built = h.lua(f"""
+    local a = remote.call('factorio_autonomous_engineer','get_agent')
+    local e = a.surface.find_entity('{target['name']}',
+      {{x={target['position']['x']}, y={target['position']['y']}}})
+    if not e then rcon.print('missing') return end
+    local box = e.bounding_box
+    rcon.print(tostring(a.position.x > box.left_top.x and a.position.x < box.right_bottom.x
+      and a.position.y > box.left_top.y and a.position.y < box.right_bottom.y))
+    """, b)
+    check("the character left the ghost footprint by ordinary walking",
+          inside_built == "false",
+          h.pretty({"inside_built_module": inside_built, "ghost": target["position"],
+                    "agent": h.status(b)["lifecycle"]["position"]}))
+    check("the ghost was revived in place, not destroyed or recreated",
+          bool(h.entity_at(target["name"], target["position"]["x"],
+                           target["position"]["y"], 2, b)),
+          h.pretty(target))
     check("the ghost recovery used normal walking rather than the emergency teleport",
           result.get("step_out_teleports", 0) == 0,
           h.pretty(result.get("step_out_teleports")))
@@ -378,6 +401,8 @@ def scenario_k() -> None:
     print("  final:", h.pretty(result)[:900])
     check("the construction task succeeds after starting on a belt",
           result.get("status") == "succeeded", result.get("reason"))
+    # Starting on a belt is not by itself a recovery reason, but when the route
+    # conflicts with the belt the controller must step off by ordinary walking.
     check("the character walked off the working belt",
           result.get("belt_step_offs", 0) >= 1,
           h.pretty({"belt_step_offs": result.get("belt_step_offs"),
@@ -388,6 +413,68 @@ def scenario_k() -> None:
     check("the requested belt ghost was built",
           bool(h.entity_at("transport-belt", ghost["position"]["x"],
                            ghost["position"]["y"], 2, b)), h.pretty(ghost))
+    check("the working belt was preserved",
+          bool(h.entity_at("transport-belt", belt["position"]["x"],
+                           belt["position"]["y"], 1, b)), h.pretty(belt))
+
+
+def scenario_l() -> None:
+    print("\nScenario L - resume while standing inside a pending module ghost")
+    # Regression for the Stage 7.1 recovery storm: after a death/respawn the character
+    # can stand inside a planned module footprint. The executor used to cancel the
+    # controller's step-out and re-target the same inside-footprint approach point,
+    # producing thousands of ghost recoveries/path requests that only ended at the task
+    # deadline. The step-out must be delegated to the movement controller and awaited.
+    b, plan, details = f.prepare("s12l-inside-ghost.zip")
+    f.set_speed(b, 1)
+    task_id = f.start_logistics(b)
+    module_names = {"stone-furnace", "electric-mining-drill", "assembling-machine-1"}
+
+    def pending_module():
+        for entry in h.task_entries(b).get("entries") or []:
+            if entry["name"] in module_names and entry["status"] in {"pending", "building"}:
+                return entry
+        return None
+
+    h.wait(lambda: h.status(b)["task"].get("built_by_agent", 0) >= 1
+           and pending_module() is not None,
+           timeout=180, interval=0.2, what="a build and a pending module ghost")
+    target = pending_module()
+    h.agent_lua("a.die() return ''", b)
+    h.wait(lambda: h.status(b)["lifecycle"]["status"] == "alive", timeout=180,
+           what="respawn")
+    still_pending = any(
+        entry["key"] == target["key"] and entry["status"] in {"pending", "building"}
+        for entry in h.task_entries(b).get("entries") or [])
+    check("the module ghost is still pending after the death", still_pending,
+          h.pretty(target))
+    if not still_pending:
+        return
+    # Test scaffolding: reproduce the respawn-inside-the-plan geometry deterministically.
+    h.lua("game.tick_paused = true", b)
+    h.agent_lua(
+        f"a.teleport({{x={target['position']['x']}, y={target['position']['y']}}}) return ''",
+        b)
+    h.lua("game.tick_paused = false", b)
+    baseline = b.call("movement_status")["result"]["stats"]
+    b.call("task_resume", {"task_id": task_id})
+    f.set_speed(b, 60)
+    result = h.wait_task(task_id, b, timeout=180)
+    stats = b.call("movement_status")["result"]["stats"]
+    delta = {name: stats.get(name, 0) - baseline.get(name, 0) for name in (
+        "ghost_recoveries", "position_recoveries", "belt_recoveries",
+        "path_requests", "no_path")}
+    print("  final:", h.pretty(result)[:700])
+    print("  movement delta:", h.pretty(delta))
+    check("the task completes after resuming inside a module ghost",
+          result.get("status") == "succeeded", result.get("reason"))
+    check("the ghost recovery was bounded rather than a request storm",
+          delta["ghost_recoveries"] <= 8 and delta["position_recoveries"] <= 8
+          and delta["path_requests"] <= 60,
+          h.pretty(delta))
+    check("no path request was retried without bound",
+          delta["no_path"] <= 6, h.pretty(delta))
+
 
 async def main() -> int:
     scenario_a()
@@ -401,6 +488,7 @@ async def main() -> int:
     scenario_i()
     scenario_j()
     scenario_k()
+    scenario_l()
     failed = [name for name, ok, _ in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed")
     if failed:

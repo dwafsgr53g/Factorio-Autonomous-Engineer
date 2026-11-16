@@ -21,7 +21,7 @@ def main() -> int:
     b = h.bridge()
     print("kit:", h.pretty(h.give_kit(b)))
     before = h.snapshot(b)
-    print("before:", h.pretty(flat(before)))
+    print("initial:", h.pretty(flat(before)))
 
     request = {"task": "gather_resource", "resource": "iron-ore", "amount": 60}
     task = b.call("task_start", request)["result"]
@@ -30,6 +30,13 @@ def main() -> int:
            what="task phase mining/moving")
     print("phase before kill:", h.status(b)["task"].get("phase"))
 
+    # Conservation is asserted across the death, so the baseline is the inventory at
+    # the moment of death. Anything the agent mined before dying is legitimate and is
+    # carried through the loot recovery; comparing with the pre-task inventory would
+    # report that as duplication.
+    before = h.snapshot(b)
+    print("before death:", h.pretty(flat(before)),
+          "| collected:", h.status(b)["task"].get("collected"))
     unit_before = before["unit"]
     print("kill:", repr(h.agent_lua("a.die() return ''", b)))
     h.wait(lambda: h.status(b)["lifecycle"]["status"] != "alive", timeout=20,
