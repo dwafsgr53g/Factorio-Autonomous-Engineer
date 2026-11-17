@@ -650,6 +650,7 @@ local function enter_recovery(movement, intent, agent, kind)
     if intent.recovery_count > RECOVERY_LIMIT then
       intent.state, intent.reason = "blocked", "no_recovery_direction"
       intent.finished_tick = game.tick
+      stop_walking(agent, movement)
     else
       intent.state, intent.reason = "waiting", "no_recovery_direction"
       intent.wait_until = game.tick + RECOVERY_WAIT_TICKS

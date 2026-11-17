@@ -181,12 +181,20 @@ def test_character_position_probe_excludes_self_and_checks_real_collisions():
 
 
 def test_terminal_recovery_failures_stop_the_character():
+    enter_recovery = block_after(MOVEMENT, "local function enter_recovery", span=3500)
+    no_direction_on_entry = block_after(
+        enter_recovery, 'intent.state, intent.reason = "blocked", "no_recovery_direction"',
+        span=350)
+    assert "stop_walking(agent, movement)" in no_direction_on_entry
+
+    tick_intent = block_after(MOVEMENT, "local function tick_intent", span=12000)
     recovery_failed = block_after(
-        MOVEMENT, 'intent.state, intent.reason = "blocked", "recovery_failed"', span=450)
+        tick_intent, 'intent.state, intent.reason = "blocked", "recovery_failed"', span=450)
     assert "stop_walking(agent, movement)" in recovery_failed
-    no_direction = block_after(
-        MOVEMENT, 'intent.state, intent.reason = "blocked", "no_recovery_direction"', span=450)
-    assert "stop_walking(agent, movement)" in no_direction
+    no_direction_on_retry = block_after(
+        tick_intent, 'intent.state, intent.reason = "blocked", "no_recovery_direction"',
+        span=450)
+    assert "stop_walking(agent, movement)" in no_direction_on_retry
 
 
 def test_invalid_character_position_is_recovered_before_pathing():
