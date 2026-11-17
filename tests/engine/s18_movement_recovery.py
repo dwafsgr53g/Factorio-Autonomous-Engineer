@@ -318,11 +318,17 @@ def scenario_belt_save_load() -> None:
           restored["movement"].get("state"))
     h.lua("game.tick_paused = false", b)
     h.wait(lambda: movement(b)["movement"].get("state") in {"arrived", "blocked"},
-           timeout=120, interval=0.1, what="post-load original destination")
+           timeout=120, interval=0.1, what="post-load belt exit completion")
     final = movement(b)
-    check("the original target was reached after save/load",
-          final["movement"].get("state") == "arrived",
-          h.pretty(final["movement"]))
+    final_position = h.status(b)["lifecycle"]["position"]
+    final_on_belt = b.call("construction_on_belt", {"position": {
+        "x": final_position["x"], "y": final_position["y"]}})["result"].get("on_belt")
+    check("post-load belt recovery completed at a safe off-belt stand point",
+          final["movement"].get("state") == "arrived"
+          and final["movement"].get("reason") == "belt_target_redirected"
+          and final_on_belt is False,
+          h.pretty({"movement": final["movement"], "position": final_position,
+                    "on_belt": final_on_belt}))
     check("post-load movement requested fresh paths instead of teleporting",
           final["stats"].get("path_requests", 0) >= 2
           and final["stats"].get("step_out_teleports", 0) == 0,
