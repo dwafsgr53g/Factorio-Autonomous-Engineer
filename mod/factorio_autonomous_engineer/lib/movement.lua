@@ -150,6 +150,9 @@ end
 
 local function collision_masks_collide(first, second)
   if not first or not second then return false end
+  if first.colliding_with_tiles_only or second.colliding_with_tiles_only then
+    return false
+  end
   if first.not_colliding_with_itself and second.not_colliding_with_itself
     and collision_masks_equal(first, second) then
     return false
