@@ -769,7 +769,7 @@ local function follow(movement, intent, agent)
 end
 
 
-local function check_belt_exit_progress(intent, agent)
+local function check_belt_exit_progress(movement, intent, agent)
   if not intent.path or not intent.recovery or intent.recovery.kind ~= "belt" then
     return false
   end
@@ -797,7 +797,7 @@ local function check_belt_exit_progress(intent, agent)
   if game.tick - (intent.belt_exit_progress_tick or game.tick) >= STUCK_WINDOW_TICKS then
     intent.state, intent.reason = "blocked", "belt_exit_no_progress"
     intent.finished_tick = game.tick
-    stop_walking(agent, nil)
+    stop_walking(agent, movement)
     return true
   end
   return false
@@ -989,7 +989,7 @@ local function tick_intent(movement, intent, agent)
         end
       elseif intent.state == "blocked" then
         request_next_belt_exit_path(movement, intent, agent)
-      elseif check_belt_exit_progress(intent, agent) then
+      elseif check_belt_exit_progress(movement, intent, agent) then
         request_next_belt_exit_path(movement, intent, agent)
       end
       return
@@ -1334,6 +1334,13 @@ function M.path_finished(s, event)
   intent.path_request_id = nil
   intent.paths_completed = (intent.paths_completed or 0) + 1
   bump_stat(movement, "path_callbacks")
+  local mover = s.agent
+  if intent.recovery and intent.recovery.kind == "belt" and mover and mover.valid
+    and not on_belt(mover.surface, mover.position, BELT_EXIT_CLEARANCE)
+    and character_position_is_free(mover) then
+    finish_recovery(movement, intent, mover)
+    return
+  end
   if event.try_again_later then
     intent.try_again_count = (intent.try_again_count or 0) + 1
     bump_stat(movement, "try_again_later")
@@ -1347,7 +1354,6 @@ function M.path_finished(s, event)
     end
     return
   end
-  local mover = s.agent
   if intent.recovery and intent.recovery.kind == "belt" and mover and mover.valid
     and request.start_position
     and distance(mover.position, request.start_position) > BELT_EXIT_STALE_START_DISTANCE then

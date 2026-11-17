@@ -138,6 +138,10 @@ def test_belt_exit_uses_engine_pathfinder_and_keeps_a_stable_candidate():
     progress = block_after(MOVEMENT, "local function check_belt_exit_progress", span=1300)
     assert "STUCK_WINDOW_TICKS" in progress
     assert "belt_exit_progress_distance" in progress
+    assert "stop_walking(agent, movement)" in progress
+    callback = block_after(MOVEMENT, "function M.path_finished", span=900)
+    assert "finish_recovery(movement, intent, mover)" in callback
+    assert "BELT_EXIT_CLEARANCE" in callback
     follow = block_after(MOVEMENT, "local function follow", span=2200)
     assert "belt_exit_candidate_reached" in follow
     finish = block_after(MOVEMENT, "local function finish_recovery", span=1200)
