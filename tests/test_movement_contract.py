@@ -79,14 +79,36 @@ def test_path_requests_are_single_flight_and_retries_bounded():
 
 
 def test_recovery_attempts_are_bounded_and_reported():
-    assert "local RECOVERY_LIMIT = 3" in MOVEMENT
+    assert "local RECOVERY_LIMIT = 6" in MOVEMENT
     assert "intent.recovery_count > RECOVERY_LIMIT" in MOVEMENT
     for reason in ('"belt_displacement"', '"ghost_obstruction"', '"invalid_position"',
                    '"recovery_complete"'):
         assert reason in MOVEMENT
-    # A belt under the character is not by itself a recovery reason.
-    idle = block_after(MOVEMENT, 'if intent.state == "idle" then', span=1800)
-    assert "belt and not belt_aligned(" in idle
+
+
+def test_belt_step_off_is_stand_only():
+    # Travel crosses belts; a step-off only happens when the character must stand at
+    # a destination that turns out to be on a belt (nearest free position instead).
+    assert "belt_aligned" not in MOVEMENT
+    assert "belt_recovery_useful" not in MOVEMENT
+    assert "stand = spec.stand == true" in MOVEMENT
+    resolve = block_after(MOVEMENT, "local function resolve_arrival", span=700)
+    assert "if intent.stand and not intent.recovery" in resolve
+    assert 'enter_recovery(movement, intent, agent, "belt")' in resolve
+    # A step-off must be awaited: the caller may not fall through to "arrived".
+    callers = MOVEMENT.count("if resolve_arrival(movement, intent, agent) == false then")
+    assert callers == 4
+    assert "find_safe_recovery_position" in MOVEMENT
+    # No belt recovery in the path callback (travel) or at route start.
+    callback = block_after(MOVEMENT, "function M.path_finished", span=2200)
+    assert "arrival_belt" not in callback
+    assert '"belt"' not in callback
+    idle = block_after(MOVEMENT, 'if intent.state == "idle" then', span=700)
+    assert 'enter_recovery(movement, intent, agent, "belt")' not in idle
+    # Tasks mark work positions and approaches as stand intents; travel does not.
+    assert 'stand = options.stand == true' in TASKS
+    assert 'stand = kind ~= "travel"' in TASKS
+    assert "stand = false" in TASKS  # explicit travel intent for resource search
 
 
 def test_invalid_character_position_is_recovered_before_pathing():
@@ -96,7 +118,9 @@ def test_invalid_character_position_is_recovered_before_pathing():
     assert "local function character_position_is_free(agent)" in MOVEMENT
     assert 'not character_position_is_free(mover)' in MOVEMENT
     assert 'enter_recovery(movement, intent, mover, "position")' in MOVEMENT
-    assert '(kind == "position") and not character_position_is_free(agent)' in MOVEMENT
+    # The recovery window uses one free-position probe per tick.
+    assert "if kind == \"belt\" then" in MOVEMENT
+    assert "on = not character_position_is_free(agent)" in MOVEMENT
 
 
 def test_task_delegates_inside_ghost_step_out_to_movement():

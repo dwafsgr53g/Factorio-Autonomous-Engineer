@@ -56,6 +56,7 @@ local function begin_move(s, task, destination, kind, options)
     owner = task.id, purpose = kind or "task",
     destination = destination, entity_unit = options.entity_unit,
     arrival_tolerance = options.arrival_tolerance or task.move_tolerance,
+    stand = options.stand == true,
   })
   if not id then
     movement.cancel(s, task.movement_request)
@@ -143,7 +144,7 @@ local function search_target(s, task)
         task.target, task.approach = resource, approach
         task.phase, task.phase_started_tick = "pathing", game.tick
         local ok, reason = begin_move(s, task, approach, "resource",
-          {arrival_tolerance = 1.5})
+          {arrival_tolerance = 1.5, stand = false})
         if ok then return true end
       end
       task.visited[key] = true
@@ -546,7 +547,10 @@ local function reset_inflight_entries(task)
 end
 
 local function begin_path(s, task, goal, kind, entity_unit)
-  local options = {entity_unit = entity_unit}
+  -- Work positions and approach points are places where the character must stand,
+  -- so a belt under them is a real conflict. Travel (resource search, safety) only
+  -- crosses belts and never steps off.
+  local options = {entity_unit = entity_unit, stand = kind ~= "travel"}
   if task.type == "build_logistics" then options.arrival_tolerance = 0.55 end
   local ok, reason = begin_move(s, task, goal, kind, options)
   if not ok then return false, reason end

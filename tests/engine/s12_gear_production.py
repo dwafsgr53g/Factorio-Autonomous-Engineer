@@ -399,13 +399,15 @@ def scenario_k() -> None:
     task_id = h.task_start({"task": "assist_construction"}, b)["task_id"]
     result = h.wait_task(task_id, b, timeout=90)
     print("  final:", h.pretty(result)[:900])
+    on_belt = b.call("construction_on_belt")["result"].get("on_belt")
+    print("  final position:", h.pretty(h.status(b)["lifecycle"]["position"]),
+          "on belt:", on_belt)
     check("the construction task succeeds after starting on a belt",
           result.get("status") == "succeeded", result.get("reason"))
-    # Starting on a belt is not by itself a recovery reason, but when the route
-    # conflicts with the belt the controller must step off by ordinary walking.
-    check("the character walked off the working belt",
+    check("the character stepped off the starting belt while walking to the approach",
           result.get("belt_step_offs", 0) >= 1,
-          h.pretty({"belt_step_offs": result.get("belt_step_offs"),
+          h.pretty({"final_position": h.status(b)["lifecycle"]["position"],
+                    "belt_step_offs": result.get("belt_step_offs"),
                     "teleports": result.get("step_out_teleports")}))
     check("the belt recovery used normal walking",
           result.get("step_out_teleports", 0) == 0,

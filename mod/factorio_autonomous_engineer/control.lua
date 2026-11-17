@@ -288,6 +288,7 @@ operations.movement_request = function(s, p)
   local request_id, reason = movement.request(s, {
     owner = p.owner or "engine_test", purpose = p.purpose or "diagnostic",
     destination = p.destination, arrival_tolerance = p.arrival_tolerance,
+    stand = p.stand == true,
   })
   return {ok = request_id ~= nil, request_id = request_id, reason = reason}
 end
