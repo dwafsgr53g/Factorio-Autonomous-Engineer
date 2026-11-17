@@ -162,9 +162,12 @@ def test_belt_exit_uses_engine_pathfinder_and_keeps_a_stable_candidate():
 
 
 def test_character_position_probe_excludes_self_and_checks_real_collisions():
+    equal_masks = block_after(MOVEMENT, "local function collision_masks_equal", span=650)
+    assert "first_layers[layer]" in equal_masks
+    assert "second_layers[layer]" in equal_masks
     masks = block_after(MOVEMENT, "local function collision_masks_collide", span=900)
     assert "not_colliding_with_itself" in masks
-    assert "first_layers[layer] and second_layers[layer]" in masks
+    assert "enabled and second_layers[layer]" in masks
     tiles = block_after(MOVEMENT, "local function collision_mask_hits_tile", span=500)
     assert "tile.collides_with(layer)" in tiles
     position = block_after(MOVEMENT, "local function character_position_is_free", span=1600)
