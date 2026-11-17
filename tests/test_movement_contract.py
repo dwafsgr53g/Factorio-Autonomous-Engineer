@@ -87,28 +87,56 @@ def test_recovery_attempts_are_bounded_and_reported():
 
 
 def test_belt_step_off_is_stand_only():
-    # Travel crosses belts; a step-off only happens when the character must stand at
-    # a destination that turns out to be on a belt (nearest free position instead).
+    # Travel crosses belts; stand intents recover only when they must remain at a
+    # belt-covered or belt-adjacent destination.
     assert "belt_aligned" not in MOVEMENT
     assert "belt_recovery_useful" not in MOVEMENT
     assert "stand = spec.stand == true" in MOVEMENT
-    resolve = block_after(MOVEMENT, "local function resolve_arrival", span=700)
-    assert "if intent.stand and not intent.recovery" in resolve
+    resolve = block_after(MOVEMENT, "local function resolve_arrival", span=800)
+    assert "intent.stand and not intent.recovery" in resolve
+    assert "BELT_EXIT_CLEARANCE" in resolve
     assert 'enter_recovery(movement, intent, agent, "belt")' in resolve
-    # A step-off must be awaited: the caller may not fall through to "arrived".
+    assert "return false" in resolve
     callers = MOVEMENT.count("if resolve_arrival(movement, intent, agent) == false then")
     assert callers == 4
-    assert "find_safe_recovery_position" in MOVEMENT
-    # No belt recovery in the path callback (travel) or at route start.
-    callback = block_after(MOVEMENT, "function M.path_finished", span=2200)
-    assert "arrival_belt" not in callback
-    assert '"belt"' not in callback
+    assert "find_safe_recovery_positions" in MOVEMENT
+    assert "BELT_EXIT_SEARCH_RADIUS = 32" in MOVEMENT
+    assert "BELT_EXIT_CLEARANCE = 1.25" in MOVEMENT
+    assert "step_out_use_path = true" in MOVEMENT
+    assert "request_next_belt_exit_path" in MOVEMENT
+    assert '"belt_exit_unreachable"' in MOVEMENT
+    candidates = block_after(MOVEMENT, "local function find_safe_recovery_positions", span=2600)
+    assert "return result" in candidates
+    assert "or position_copy(start)" not in candidates
+    stuck = block_after(MOVEMENT, "local function check_stuck", span=1000)
+    assert 'enter_recovery(movement, intent, agent, "belt")' not in stuck
+    assert "DIRECTION_VECTORS" not in MOVEMENT
+    assert "BELT_STEP_OFF_GRACE_TICKS" not in MOVEMENT
+    assert "belt_step_off_until" not in MOVEMENT
+    callback = block_after(MOVEMENT, "function M.path_finished", span=3000)
+    assert "belt_exit_no_path" in callback
+    assert "belt_exit_stale_paths" in callback
     idle = block_after(MOVEMENT, 'if intent.state == "idle" then', span=700)
     assert 'enter_recovery(movement, intent, agent, "belt")' not in idle
-    # Tasks mark work positions and approaches as stand intents; travel does not.
     assert 'stand = options.stand == true' in TASKS
     assert 'stand = kind ~= "travel"' in TASKS
-    assert "stand = false" in TASKS  # explicit travel intent for resource search
+    assert "stand = false" in TASKS
+
+
+def test_belt_exit_uses_engine_pathfinder_and_keeps_a_stable_candidate():
+    recovery = block_after(MOVEMENT, "local function enter_recovery", span=2800)
+    assert "find_safe_recovery_positions" in recovery
+    assert "return request_next_belt_exit_path" in recovery
+    request = block_after(MOVEMENT, "local function request_next_belt_exit_path", span=1700)
+    assert "request_path(movement, intent, agent)" in request
+    assert "intent.destination = position_copy(candidate)" in request
+    assert "step_out_use_path = true" in request
+    assert "local BELT_EXIT_STALE_START_DISTANCE = 1.0" in MOVEMENT
+    assert "belt_exit_stale_start" in MOVEMENT
+    finish = block_after(MOVEMENT, "local function finish_recovery", span=1200)
+    assert '"belt_target_redirected"' in finish
+    assert "resume_original" in finish
+
 
 
 def test_invalid_character_position_is_recovered_before_pathing():

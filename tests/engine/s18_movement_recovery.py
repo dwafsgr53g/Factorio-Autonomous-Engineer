@@ -271,7 +271,11 @@ def start_conflicting_belt_intent(b: h.Bridge, owner: str, *, pause: bool = Fals
     assert requested.get("ok"), requested
 
     def recovering() -> bool:
-        if movement(b)["movement"].get("state") != "recovering":
+        status = movement(b)["movement"]
+        active_exit = status.get("recovery_kind") == "belt" and status.get("state") in {
+            "recovering", "path_pending", "following_path"
+        }
+        if not active_exit:
             return False
         if pause:
             h.lua("game.tick_paused = true", b)
