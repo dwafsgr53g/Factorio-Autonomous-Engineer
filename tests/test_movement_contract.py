@@ -133,6 +133,13 @@ def test_belt_exit_uses_engine_pathfinder_and_keeps_a_stable_candidate():
     assert "step_out_use_path = true" in request
     assert "local BELT_EXIT_STALE_START_DISTANCE = 1.0" in MOVEMENT
     assert "belt_exit_stale_start" in MOVEMENT
+    assert "belt_exit_candidate_reached" in MOVEMENT
+    assert "belt_exit_no_progress" in MOVEMENT
+    progress = block_after(MOVEMENT, "local function check_belt_exit_progress", span=1300)
+    assert "STUCK_WINDOW_TICKS" in progress
+    assert "belt_exit_progress_distance" in progress
+    follow = block_after(MOVEMENT, "local function follow", span=2200)
+    assert "belt_exit_candidate_reached" in follow
     finish = block_after(MOVEMENT, "local function finish_recovery", span=1200)
     assert '"belt_target_redirected"' in finish
     assert "resume_original" in finish

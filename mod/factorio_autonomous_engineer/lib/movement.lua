@@ -355,9 +355,14 @@ local function request_next_belt_exit_path(movement, intent, agent)
     local candidate = candidates[recovery.candidate_index]
     intent.destination = position_copy(candidate)
     intent.entity_unit = nil
-    intent.arrival_tolerance = 0.25
+    -- The pathfinder's final waypoint may be treated as reached within
+    -- WAYPOINT_TOLERANCE, so this must be at least that large.
+    intent.arrival_tolerance = 0.5
     intent.path, intent.waypoint_index = nil, 1
     intent.samples = {}
+    intent.belt_exit_progress_waypoint = nil
+    intent.belt_exit_progress_distance = nil
+    intent.belt_exit_progress_tick = game.tick
     intent.step_out_use_path = true
     intent.step_out_kind = "belt"
     intent.state, intent.reason = "recovering", "belt_exit_pathing"
@@ -719,8 +724,18 @@ local function follow(movement, intent, agent)
       if resolve_arrival(movement, intent, agent) == false then return end
     end
     if intent.step_out_use_path then
-      intent.state = "recovering"
-      intent.path, intent.waypoint_index = nil, 1
+      if intent.recovery and intent.recovery.kind == "belt" then
+        if distance(position, intent.destination) <= intent.arrival_tolerance then
+          intent.state, intent.reason = "arrived", "belt_exit_candidate_reached"
+        else
+          intent.state, intent.reason = "blocked", "belt_exit_goal_not_reached"
+        end
+        intent.finished_tick = game.tick
+        stop_walking(agent, movement)
+      else
+        intent.state = "recovering"
+        intent.path, intent.waypoint_index = nil, 1
+      end
       return
     end
     -- The last waypoint is close to the destination but not within tolerance.
@@ -751,6 +766,41 @@ local function follow(movement, intent, agent)
   end
   local direction = direction_toward(position, waypoint.position)
   start_walking(agent, movement, direction, intent)
+end
+
+
+local function check_belt_exit_progress(intent, agent)
+  if not intent.path or not intent.recovery or intent.recovery.kind ~= "belt" then
+    return false
+  end
+  local index = intent.waypoint_index or 1
+  while index <= #intent.path
+    and distance(agent.position, intent.path[index].position) <= WAYPOINT_TOLERANCE do
+    index = index + 1
+  end
+  intent.waypoint_index = index
+  if index > #intent.path then return false end
+
+  local remaining = distance(agent.position, intent.path[index].position)
+  if intent.belt_exit_progress_waypoint ~= index then
+    intent.belt_exit_progress_waypoint = index
+    intent.belt_exit_progress_distance = remaining
+    intent.belt_exit_progress_tick = game.tick
+    return false
+  end
+  local best = intent.belt_exit_progress_distance or remaining
+  if remaining < best - 0.15 then
+    intent.belt_exit_progress_distance = remaining
+    intent.belt_exit_progress_tick = game.tick
+    return false
+  end
+  if game.tick - (intent.belt_exit_progress_tick or game.tick) >= STUCK_WINDOW_TICKS then
+    intent.state, intent.reason = "blocked", "belt_exit_no_progress"
+    intent.finished_tick = game.tick
+    stop_walking(agent, nil)
+    return true
+  end
+  return false
 end
 
 local function check_stuck(movement, intent, agent)
@@ -921,7 +971,11 @@ local function tick_intent(movement, intent, agent)
       return
     end
     if intent.state == "blocked" then
-      request_next_belt_exit_path(movement, intent, agent)
+      if intent.reason ~= "belt_exit_unreachable"
+        and intent.reason ~= "no_belt_free_exit"
+        and intent.reason ~= "belt_exit_invalid_start" then
+        request_next_belt_exit_path(movement, intent, agent)
+      end
       return
     end
     if intent.path and #intent.path > 0 then
@@ -934,6 +988,8 @@ local function tick_intent(movement, intent, agent)
           request_next_belt_exit_path(movement, intent, agent)
         end
       elseif intent.state == "blocked" then
+        request_next_belt_exit_path(movement, intent, agent)
+      elseif check_belt_exit_progress(intent, agent) then
         request_next_belt_exit_path(movement, intent, agent)
       end
       return
@@ -1291,6 +1347,15 @@ function M.path_finished(s, event)
     end
     return
   end
+  local mover = s.agent
+  if intent.recovery and intent.recovery.kind == "belt" and mover and mover.valid
+    and request.start_position
+    and distance(mover.position, request.start_position) > BELT_EXIT_STALE_START_DISTANCE then
+    intent.path = nil
+    intent.state, intent.reason = "recovering", "belt_exit_stale_start"
+    bump_stat(movement, "belt_exit_stale_paths")
+    return
+  end
   local path = event.path
   if not path or #path == 0 then
     local mover = s.agent
@@ -1346,6 +1411,9 @@ function M.path_finished(s, event)
   end
   intent.path = path
   intent.waypoint_index = 1
+  intent.belt_exit_progress_waypoint = nil
+  intent.belt_exit_progress_distance = nil
+  intent.belt_exit_progress_tick = game.tick
   intent.state = intent.step_out_use_path and "recovering" or "following_path"
   intent.reason = nil
   intent.path_started_tick = game.tick
