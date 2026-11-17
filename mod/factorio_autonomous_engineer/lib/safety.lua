@@ -245,7 +245,8 @@ function M.tick(s)
   end
 
   local no_destination_retry = not safety.destination
-    and game.tick - (safety.last_replan_tick or 0) >= PATH_RETRY_TICKS
+    and (not safety.last_replan_tick
+      or game.tick - safety.last_replan_tick >= PATH_RETRY_TICKS)
   local needs_plan = no_destination_retry or safety.status == "replanning"
     or (safety.status == "blocked" and game.tick - (safety.last_replan_tick or 0) >= PATH_RETRY_TICKS)
     or (safety.status == "pathing" and game.tick - (safety.path_requested_tick or game.tick) >= PATH_TIMEOUT_TICKS)

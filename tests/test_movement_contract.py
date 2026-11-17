@@ -235,6 +235,9 @@ def test_work_scheduler_never_moves_the_character():
 def test_safety_preempts_ordinary_movement_through_the_controller():
     assert "movement.interrupt_primary(s, " in SAFETY
     assert "movement.emergency(s, {" in SAFETY
+    safety_tick = block_after(SAFETY, "function M.tick(s)", span=3600)
+    assert "not safety.last_replan_tick" in safety_tick
+    assert "game.tick - safety.last_replan_tick >= PATH_RETRY_TICKS" in safety_tick
     assert not re.search(r"walking_state\s*=", code_without_comments(SAFETY))
 
 
