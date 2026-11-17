@@ -387,7 +387,7 @@ script.on_event(defines.events.on_tick, function()
   if s.recovery_save then
     local m = s.movement
     local intent = m and m.primary and m.intents[m.primary]
-    if intent and intent.recovery then
+    if intent and intent.recovery and intent.recovery.kind == "belt" then
       local save = s.recovery_save
       s.recovery_save, s.recovery_save_done = nil, true
       game.tick_paused = true
