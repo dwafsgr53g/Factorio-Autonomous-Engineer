@@ -29,6 +29,10 @@ local BELT_EXIT_SEARCH_RADIUS = 32
 local BELT_EXIT_CLEARANCE = 1.25
 local BELT_EXIT_DIRECTIONS = 16
 local BELT_EXIT_PATH_RADIUS = 0.25
+-- The follower can skip a waypoint within WAYPOINT_TOLERANCE, and the pathfinder
+-- may stop within its requested goal radius. Include both in the candidate margin.
+local BELT_EXIT_CANDIDATE_CLEARANCE =
+  BELT_EXIT_CLEARANCE + WAYPOINT_TOLERANCE + BELT_EXIT_PATH_RADIUS
 local BELT_EXIT_STALE_START_DISTANCE = 1.0
 local BELT_STEP_OUT_WINDOW_TICKS = 180
 local RECOVERY_WAIT_TICKS = 60
@@ -256,7 +260,7 @@ end
 local function find_safe_recovery_positions(surface, agent)
   if not surface or not agent or not agent.valid then return {} end
   local start = agent.position
-  local scan = BELT_EXIT_SEARCH_RADIUS + BELT_EXIT_CLEARANCE + 1
+  local scan = BELT_EXIT_SEARCH_RADIUS + BELT_EXIT_CANDIDATE_CLEARANCE + 1
   local belts = surface.find_entities_filtered{
     area = {{x = start.x - scan, y = start.y - scan},
       {x = start.x + scan, y = start.y + scan}},
@@ -264,7 +268,7 @@ local function find_safe_recovery_positions(surface, agent)
   }
   local function belt_clear(position)
     for _, belt in pairs(belts) do
-      if belt.valid and point_inside_box(position, belt.bounding_box, BELT_EXIT_CLEARANCE) then
+      if belt.valid and point_inside_box(position, belt.bounding_box, BELT_EXIT_CANDIDATE_CLEARANCE) then
         return false
       end
     end

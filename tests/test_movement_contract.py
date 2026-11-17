@@ -102,6 +102,8 @@ def test_belt_step_off_is_stand_only():
     assert "find_safe_recovery_positions" in MOVEMENT
     assert "BELT_EXIT_SEARCH_RADIUS = 32" in MOVEMENT
     assert "BELT_EXIT_CLEARANCE = 1.25" in MOVEMENT
+    assert "BELT_EXIT_CANDIDATE_CLEARANCE" in MOVEMENT
+    assert "WAYPOINT_TOLERANCE + BELT_EXIT_PATH_RADIUS" in MOVEMENT
     assert "step_out_use_path = true" in MOVEMENT
     assert "request_next_belt_exit_path" in MOVEMENT
     assert '"belt_exit_unreachable"' in MOVEMENT
