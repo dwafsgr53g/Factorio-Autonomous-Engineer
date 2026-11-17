@@ -139,7 +139,11 @@ def test_belt_exit_uses_engine_pathfinder_and_keeps_a_stable_candidate():
     assert "belt_exit_no_progress" in MOVEMENT
     post_load = block_after(MOVEMENT, 'if loaded_from_save then', span=1700)
     assert "recovery.exit_candidates = nil" in post_load
-    belt_tick = block_after(MOVEMENT, 'if intent.recovery and intent.recovery.kind == "belt" and intent.step_out_use_path then', span=1900)
+    belt_tick_marker = (
+        'if intent.recovery and intent.recovery.kind == "belt" '
+        'and intent.step_out_use_path then'
+    )
+    belt_tick = block_after(MOVEMENT, belt_tick_marker, span=1900)
     assert "if not intent.recovery.exit_candidates then" in belt_tick
     assert "request_next_belt_exit_path(movement, intent, agent)" in belt_tick
     progress = block_after(MOVEMENT, "local function check_belt_exit_progress", span=1300)
