@@ -161,14 +161,38 @@ def test_belt_exit_uses_engine_pathfinder_and_keeps_a_stable_candidate():
 
 
 
+def test_character_position_probe_excludes_self_and_checks_real_collisions():
+    masks = block_after(MOVEMENT, "local function collision_masks_collide", span=900)
+    assert "not_colliding_with_itself" in masks
+    assert "first_layers[layer] and second_layers[layer]" in masks
+    tiles = block_after(MOVEMENT, "local function collision_mask_hits_tile", span=500)
+    assert "tile.collides_with(layer)" in tiles
+    position = block_after(MOVEMENT, "local function character_position_is_free", span=1600)
+    assert "agent.bounding_box" in position
+    assert "surface.find_entities_filtered{area = box}" in position
+    assert "other ~= agent" in position
+    assert "other.unit_number ~= agent.unit_number" in position
+    assert "boxes_overlap(box, other.bounding_box)" in position
+    assert "find_non_colliding_position" not in position
+    assert "can_place_entity" not in position
+
+
+def test_terminal_recovery_failures_stop_the_character():
+    recovery_failed = block_after(
+        MOVEMENT, 'intent.state, intent.reason = "blocked", "recovery_failed"', span=450)
+    assert "stop_walking(agent, movement)" in recovery_failed
+    no_direction = block_after(
+        MOVEMENT, 'intent.state, intent.reason = "blocked", "no_recovery_direction"', span=450)
+    assert "stop_walking(agent, movement)" in no_direction
+
+
 def test_invalid_character_position_is_recovered_before_pathing():
-    # The pathfinder refuses to plan from a position the engine reports as
-    # non-placeable (a belt can carry the character into such a spot), so the
-    # controller must step out instead of treating the target as unreachable.
+    # Detect actual terrain/entity collisions without treating the agent's own
+    # occupied collision box as an obstruction.
     assert "local function character_position_is_free(agent)" in MOVEMENT
     assert 'not character_position_is_free(mover)' in MOVEMENT
     assert 'enter_recovery(movement, intent, mover, "position")' in MOVEMENT
-    # The recovery window uses one free-position probe per tick.
+    # The recovery window uses one live collision probe per tick.
     assert "if kind == \"belt\" then" in MOVEMENT
     assert "on = not character_position_is_free(agent)" in MOVEMENT
 

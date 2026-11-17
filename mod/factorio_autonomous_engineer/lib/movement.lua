@@ -134,23 +134,90 @@ local function other_character_near(agent, position, radius)
   return nil
 end
 
--- A belt can carry a character into a position whose collision box clips the
--- belt's own box. The engine still lets the character walk, but the pathfinder
--- refuses to plan from a non-placeable start and returns an empty path, so a
--- route would otherwise look permanently unreachable. This probe lets the
--- controller step out before giving up on a target.
---
--- ``can_place_entity{name = "character"}`` cannot be used here: the character's
--- own body blocks its own position. The engine's nearest free position is used
--- instead, which returns the current position when it is already walkable.
+-- Collision masks describe which entity layers collide. Match the engine's
+-- layer-intersection rule, including the not_colliding_with_itself exception.
+local function collision_masks_equal(first, second)
+  local first_layers = first and first.layers or {}
+  local second_layers = second and second.layers or {}
+  for layer, enabled in pairs(first_layers) do
+    if enabled and not second_layers[layer] then return false end
+  end
+  for layer, enabled in pairs(second_layers) do
+    if enabled and not first_layers[layer] then return false end
+  end
+  return true
+end
+
+local function collision_masks_collide(first, second)
+  if not first or not second then return false end
+  if first.not_colliding_with_itself and second.not_colliding_with_itself
+    and collision_masks_equal(first, second) then
+    return false
+  end
+  local second_layers = second.layers or {}
+  for layer, enabled in pairs(first.layers or {}) do
+    if enabled and second_layers[layer] then return true end
+  end
+  return false
+end
+
+local function boxes_overlap(first, second)
+  if not first or not second then return false end
+  return first.left_top.x < second.right_bottom.x
+    and second.left_top.x < first.right_bottom.x
+    and first.left_top.y < second.right_bottom.y
+    and second.left_top.y < first.right_bottom.y
+end
+
+local function collision_mask_hits_tile(mask, tile)
+  if not tile or not tile.valid then return false end
+  for layer, enabled in pairs(mask.layers or {}) do
+    if enabled and tile.collides_with(layer) then return true end
+  end
+  return false
+end
+
+local function tiles_block_character(surface, box, position, mask)
+  -- Character masks with consider_tile_transitions collide with tiles at the
+  -- entity position, not across every tile touched by the collision box.
+  if mask.consider_tile_transitions then
+    return collision_mask_hits_tile(mask, surface.get_tile(position))
+  end
+  for x = math.floor(box.left_top.x), math.ceil(box.right_bottom.x) - 1 do
+    for y = math.floor(box.left_top.y), math.ceil(box.right_bottom.y) - 1 do
+      if collision_mask_hits_tile(mask, surface.get_tile({x = x, y = y})) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- find_non_colliding_position() and can_place_entity() include the existing
+-- character body in their placement checks. Test its current collision box
+-- against terrain and other entities directly, explicitly excluding the agent.
 local function character_position_is_free(agent)
   if not agent or not agent.valid then return false end
   local ok, free = pcall(function()
-    return agent.surface.find_non_colliding_position(
-      "character", agent.position, 1.0, 0.05)
+    local surface = agent.surface
+    local box = agent.bounding_box
+    local mask = agent.prototype and agent.prototype.collision_mask
+    if not surface or not box or not mask or type(mask.layers) ~= "table" then
+      return false
+    end
+    if tiles_block_character(surface, box, agent.position, mask) then
+      return false
+    end
+    for _, other in pairs(surface.find_entities_filtered{area = box}) do
+      if other.valid and other ~= agent and other.unit_number ~= agent.unit_number
+        and boxes_overlap(box, other.bounding_box) then
+        local other_mask = other.prototype and other.prototype.collision_mask
+        if collision_masks_collide(mask, other_mask) then return false end
+      end
+    end
+    return true
   end)
-  if not ok or not free then return false end
-  return distance(free, agent.position) < 0.2
+  return ok and free == true
 end
 
 local function state()
@@ -1038,6 +1105,7 @@ local function tick_intent(movement, intent, agent)
         intent.state, intent.reason = "blocked", "recovery_failed"
         intent.finished_tick = game.tick
         intent.step_out_until, intent.step_out_direction = nil, nil
+        stop_walking(agent, movement)
         return
       end
       -- Try another bounded step-out with a fresh direction.
@@ -1052,6 +1120,7 @@ local function tick_intent(movement, intent, agent)
       intent.state, intent.reason = "blocked", "no_recovery_direction"
       intent.finished_tick = game.tick
       intent.step_out_until, intent.step_out_direction = nil, nil
+      stop_walking(agent, movement)
       return
     end
     -- The character is free: restore the original destination and resume routing.
