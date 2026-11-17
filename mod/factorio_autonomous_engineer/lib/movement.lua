@@ -999,7 +999,14 @@ local function tick_intent(movement, intent, agent)
       return
     end
     if intent.state == "recovering" or intent.state == "idle" then
-      request_path(movement, intent, agent)
+      -- On load, candidate geometry and path handles are discarded. Rebuild the
+      -- candidate list from the current position and start a fresh exit request;
+      -- do not accidentally route straight to the original work destination.
+      if not intent.recovery.exit_candidates then
+        request_next_belt_exit_path(movement, intent, agent)
+      else
+        request_path(movement, intent, agent)
+      end
       return
     end
     return

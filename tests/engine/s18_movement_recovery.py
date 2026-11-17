@@ -309,6 +309,9 @@ def scenario_belt_save_load() -> None:
           destination in ({"x": 20.5, "y": 4.5}, {"x": 40.5, "y": 4.5}),
           h.pretty({"destination": destination,
                     "restored_intent": restored_intent.get("destination")}))
+    check("reloaded intent retained active belt recovery",
+          restored_intent.get("recovery_kind") == "belt",
+          h.pretty(restored_intent))
     check("reloaded recovery returned to a routable state",
           restored["movement"].get("state") in {"idle", "path_pending", "following_path",
                                                  "recovering", "arrived"},
